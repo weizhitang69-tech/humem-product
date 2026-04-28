@@ -16,12 +16,17 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("--store", type=Path, required=True)
     ingest.add_argument("--document-id")
     ingest.add_argument("--title")
+    ingest.add_argument("--embedding-provider", choices=["openai"])
+    ingest.add_argument("--embedding-model", default="text-embedding-3-small")
 
     ask = subparsers.add_parser("ask", help="query a memory store")
     ask.add_argument("query")
     ask.add_argument("--store", type=Path, required=True)
     ask.add_argument("--limit", type=int, default=6)
     ask.add_argument("--json", action="store_true")
+    ask.add_argument("--embedding-provider", choices=["openai"])
+    ask.add_argument("--embedding-model", default="text-embedding-3-small")
+    ask.add_argument("--no-auto-embed", action="store_true")
 
     stats = subparsers.add_parser("stats", help="print memory store diagnostics")
     stats.add_argument("--store", type=Path, required=True)
@@ -39,7 +44,13 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     if args.command == "ingest":
-        rag = LayeredMemoryRAG.load(args.store) if args.store.exists() else LayeredMemoryRAG()
+        if args.store.exists():
+            rag = _load_store(args.store, args.embedding_provider, args.embedding_model)
+        else:
+            rag = LayeredMemoryRAG(
+                embedding_provider=args.embedding_provider,
+                embedding_model=args.embedding_model,
+            )
         text = args.input.read_text(encoding="utf-8")
         doc_id = rag.add_document(
             text,
@@ -51,9 +62,17 @@ def main(argv: list[str] | None = None) -> None:
         print(f"ingested document={doc_id} fragments={len(rag.space.fragments)} store={args.store}")
         return
 
-    rag = LayeredMemoryRAG.load(args.store)
+    rag = _load_store(
+        args.store,
+        getattr(args, "embedding_provider", None),
+        getattr(args, "embedding_model", "text-embedding-3-small"),
+    )
 
     if args.command == "ask":
+        if args.embedding_provider and not args.no_auto_embed:
+            embedded_count = rag.embed_missing_chunks()
+            if embedded_count:
+                rag.save(args.store)
         answer = rag.answer(args.query, limit=args.limit)
         rag.save(args.store)
         if args.json:
@@ -101,6 +120,8 @@ def _answer_to_dict(answer: RAGAnswer) -> dict[str, object]:
                 "kind": item.kind,
                 "layer": item.layer,
                 "score": item.score,
+                "memory_score": item.memory_score,
+                "embedding_score": item.embedding_score,
                 "via_relation": item.via_relation,
                 "document_id": item.document_id,
                 "chunk_id": item.chunk_id,
@@ -110,6 +131,20 @@ def _answer_to_dict(answer: RAGAnswer) -> dict[str, object]:
             for item in answer.evidence
         ],
     }
+
+
+def _load_store(
+    store: Path,
+    embedding_provider: str | None,
+    embedding_model: str,
+) -> LayeredMemoryRAG:
+    if embedding_provider:
+        return LayeredMemoryRAG.load_with_embeddings(
+            store,
+            embedding_provider=embedding_provider,
+            embedding_model=embedding_model,
+        )
+    return LayeredMemoryRAG.load(store)
 
 
 if __name__ == "__main__":

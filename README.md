@@ -1,12 +1,14 @@
 # HuMem Product
 
-HuMem Product 是一个可直接嵌入应用的本地分层记忆 RAG 模块。它从 HuMem 研究原型中拆出稳定的产品层，保留“上层稀疏锚点、下层稠密细节、关系牵引召回、读取强化、遗忘下沉”的记忆机制。
+HuMem Product 是一个可直接嵌入应用的本地分层记忆 RAG 模块。它从 HuMem 研究原型中拆出稳定的产品层，保留“上层稀疏锚点、下层稠密细节、关系牵引召回、读取强化、遗忘下沉”的记忆机制，同时把 embedding 做成可选增强。
+
+默认模式下，它不需要向量数据库、不需要模型 API、不需要 PyTorch；启用 OpenAI embedding 后，它会变成混合检索：`HuMem 分层记忆分数 + embedding 语义相似度`。
 
 它适合做：
 
 - AI 应用的长期记忆层；
 - 个人知识库、客服工单、项目日志的轻量 RAG；
-- 不想引入向量数据库时的本地检索与证据层；
+- 不想一开始就部署向量数据库的本地检索与证据层；
 - 需要“记忆会随使用变化”的 Agent memory；
 - 后续接入 LLM 前的可解释上下文召回模块。
 
@@ -14,20 +16,31 @@ HuMem Product 是一个可直接嵌入应用的本地分层记忆 RAG 模块。�
 
 ![HuMem Product layered memory RAG architecture](docs/assets/layered-memory-rag.svg)
 
+## 两种运行模式
+
+| 模式 | 是否需要 API Key | 适合场景 | 检索方式 |
+| --- | --- | --- | --- |
+| Local memory mode | 否 | 本地、离线、零成本、可解释记忆 | 分层规则检索 + 关系扩展 |
+| Hybrid embedding mode | 是，默认 `OPENAI_API_KEY` | 查询改写、同义表达、语义相似召回 | HuMem 分层分数 + embedding 相似度 |
+
+默认就是 Local memory mode。只有显式传入 `embedding_provider="openai"` 或 CLI 传 `--embedding-provider openai` 时，才会调用 OpenAI Embeddings API。
+
 ## 核心能力
 
 | 能力 | 说明 |
 | --- | --- |
 | 文档写入 | `add_document()` 会切分文本、解析记忆片段、建立来源映射 |
 | 记忆写入 | `add_memory()` 适合写入短事实、用户偏好、会话摘要 |
+| Chunking | 默认 `chunk_size=700`、`chunk_overlap=80`，可在写入时调整 |
 | 分层记忆 | 上层保存易召回锚点，下层保存噪声更高但可能有用的细节 |
 | 关系扩展 | 被 sealed 的底层细节不会轻易直接命中，但可以被上层锚点通过关系带出 |
+| 可选 embedding | 默认模型为 `text-embedding-3-small`，embedding 保存在 JSON store 的 chunk 中 |
+| 混合检索 | 默认权重 `memory_weight=0.65`、`embedding_weight=0.35` |
 | 证据对象 | 查询返回 `MemoryEvidence`，包含来源、层级、分数、关系路径和 chunk |
 | 抽取式答案 | `answer()` 会基于最佳证据组装一个可直接返回或交给 LLM 的上下文答案 |
 | 读取强化 | 每次 retrieve/answer 会温和强化被命中的片段 |
 | 遗忘衰减 | `decay()` 会让弱激活片段下沉，模拟长期记忆的可提取性变化 |
-| 本地持久化 | `save()` / `load()` 使用 JSON 保存完整记忆图、文档、chunk 和计数器 |
-| 零运行依赖 | Python 3.11+ 即可运行，不需要 Torch、向量数据库或外部服务 |
+| 本地持久化 | `save()` / `load()` 使用 JSON 保存完整记忆图、文档、chunk、embedding 和计数器 |
 
 ## 安装
 
@@ -50,7 +63,32 @@ $env:PYTHONPATH = "src"
 python -m humem_product.cli --help
 ```
 
-## 快速开始
+## API Key 放在哪里？
+
+如果不启用 embedding，不需要任何 API Key。
+
+如果启用 OpenAI embedding，推荐把 key 放到环境变量：
+
+```powershell
+$env:OPENAI_API_KEY = "你的 OpenAI API Key"
+```
+
+Linux/macOS：
+
+```bash
+export OPENAI_API_KEY="your-openai-api-key"
+```
+
+代码中也可以直接传入，但不建议把 key 写进仓库：
+
+```python
+rag = LayeredMemoryRAG(
+    embedding_provider="openai",
+    embedding_api_key="your-openai-api-key",
+)
+```
+
+## 快速开始：本地模式
 
 ```python
 from humem_product import LayeredMemoryRAG
@@ -71,30 +109,115 @@ for item in answer.evidence:
     print(item.title, item.layer, item.score, item.text)
 
 rag.save("memory-store.json")
-restored = LayeredMemoryRAG.load("memory-store.json")
 ```
 
-返回的 `RAGAnswer` 包含三部分：
+## 快速开始：启用 OpenAI embedding
 
 ```python
-answer.query          # 原始查询
-answer.answer         # 基于证据 chunk 组装的抽取式答案
-answer.evidence       # MemoryEvidence 列表
-answer.diagnostics    # fragment_count, relation_count, layer_histogram 等诊断信息
+from humem_product import LayeredMemoryRAG
+
+rag = LayeredMemoryRAG(
+    embedding_provider="openai",
+    embedding_model="text-embedding-3-small",
+    memory_weight=0.65,
+    embedding_weight=0.35,
+)
+
+rag.add_document(
+    "Alice keeps the robot launch checklist in the blue notebook.",
+    title="Launch Notes",
+)
+
+# 字面没有 checklist/launch，也能通过 embedding 语义召回
+answer = rag.answer("Where is the robotics deployment plan stored?")
+print(answer.answer)
+
+rag.save("memory-store.json")
 ```
+
+如果已有 store 是之前本地模式写入的，可以加载后补 embedding：
+
+```python
+rag = LayeredMemoryRAG.load_with_embeddings(
+    "memory-store.json",
+    embedding_provider="openai",
+)
+
+embedded_count = rag.embed_missing_chunks()
+rag.save("memory-store.json")
+```
+
+## Chunk 和 embedding 细节
+
+Chunking 在 `src/humem_product/rag.py` 的 `_chunk_text()` 中实现：
+
+```python
+rag.add_document(
+    text,
+    chunk_size=700,
+    chunk_overlap=80,
+)
+```
+
+默认策略：
+
+- 先按句子/换行切分；
+- 尽量把句子合并到不超过 `chunk_size`；
+- 相邻 chunk 保留 `chunk_overlap` 字符的上下文；
+- 每个 chunk 会保存 `document_id`、`chunk_id`、`title`；
+- 启用 embedding 时，每个 chunk 会保存 `embedding` 和 `embedding_model`。
+
+Embedding provider 在 `src/humem_product/embeddings.py` 中实现。当前内置：
+
+- `OpenAIEmbeddingProvider`
+- 默认模型：`text-embedding-3-small`
+- 接口：`POST https://api.openai.com/v1/embeddings`
+- 不依赖 OpenAI SDK，使用 Python 标准库发请求
+
+OpenAI 官方 Embeddings API 参考见：
+
+- https://platform.openai.com/docs/api-reference/embeddings/create
+- https://platform.openai.com/docs/guides/embeddings
 
 ## 命令行使用
 
-写入文档：
+本地模式写入文档：
 
 ```bash
 humem-product ingest notes.txt --store memory-store.json --title "Launch Notes"
+```
+
+启用 OpenAI embedding 写入文档：
+
+```bash
+humem-product ingest notes.txt \
+  --store memory-store.json \
+  --title "Launch Notes" \
+  --embedding-provider openai \
+  --embedding-model text-embedding-3-small
 ```
 
 查询：
 
 ```bash
 humem-product ask "robot launch checklist" --store memory-store.json
+```
+
+启用 embedding 查询。若已有 chunk 没有 embedding，会自动补齐并保存：
+
+```bash
+humem-product ask "robotics deployment plan" \
+  --store memory-store.json \
+  --embedding-provider openai
+```
+
+如果不想自动补齐旧 chunk：
+
+```bash
+humem-product ask "robotics deployment plan" \
+  --store memory-store.json \
+  --embedding-provider openai \
+  --no-auto-embed
 ```
 
 返回 JSON，适合服务端或脚本集成：
@@ -159,8 +282,10 @@ evidence = rag.retrieve("incident response runbook", limit=8)
 | `text` | 命中的片段文本 |
 | `kind` | `clause`、`concept`、`action`、`number`、`term` 等 |
 | `layer` | 当前所在记忆层，数字越小越容易召回 |
-| `score` | 综合匹配分数 |
-| `via_relation` | 如果是关系扩展带出的命中，会显示关系类型 |
+| `score` | 混合后的最终分数 |
+| `memory_score` | HuMem 分层记忆原始分数 |
+| `embedding_score` | embedding cosine similarity |
+| `via_relation` | 关系扩展类型；embedding 命中会标记为 `embedding` |
 | `document_id` | 来源文档 |
 | `chunk_id` | 来源 chunk |
 | `title` | 来源标题 |
@@ -173,6 +298,14 @@ answer = rag.answer("incident response runbook", limit=6)
 ```
 
 `answer()` 不调用 LLM。它返回的是抽取式答案和证据。你可以直接展示，也可以把 `answer.evidence` 拼进自己的 LLM prompt。
+
+### `LayeredMemoryRAG.embed_missing_chunks`
+
+```python
+count = rag.embed_missing_chunks(batch_size=32)
+```
+
+当你给旧 store 开启 embedding 时，用这个方法补齐缺失的 chunk embedding。
 
 ### `LayeredMemoryRAG.decay`
 
@@ -189,6 +322,15 @@ rag.save("memory-store.json")
 rag = LayeredMemoryRAG.load("memory-store.json")
 ```
 
+如果要加载并启用 embedding：
+
+```python
+rag = LayeredMemoryRAG.load_with_embeddings(
+    "memory-store.json",
+    embedding_provider="openai",
+)
+```
+
 JSON store 保存：
 
 - memory space 配置；
@@ -196,12 +338,11 @@ JSON store 保存：
 - relations；
 - source documents；
 - chunks；
+- optional chunk embeddings；
 - activation / strength / retrieval counters；
 - relation cross-layer 状态。
 
 ## 后端集成示例
-
-一个典型服务端可以在启动时加载 JSON store，在请求后保存：
 
 ```python
 from humem_product import LayeredMemoryRAG
@@ -209,17 +350,24 @@ from humem_product import LayeredMemoryRAG
 STORE_PATH = "memory-store.json"
 
 try:
-    rag = LayeredMemoryRAG.load(STORE_PATH)
+    rag = LayeredMemoryRAG.load_with_embeddings(
+        STORE_PATH,
+        embedding_provider="openai",
+    )
 except FileNotFoundError:
-    rag = LayeredMemoryRAG()
+    rag = LayeredMemoryRAG(
+        embedding_provider="openai",
+    )
 
 
 def ingest_note(user_id: str, text: str) -> str:
-    return rag.add_document(
+    doc_id = rag.add_document(
         text,
         title=f"user:{user_id}",
         metadata={"user_id": user_id},
     )
+    rag.save(STORE_PATH)
+    return doc_id
 
 
 def answer_question(query: str) -> dict:
@@ -233,6 +381,8 @@ def answer_question(query: str) -> dict:
                 "title": item.title,
                 "layer": item.layer,
                 "score": item.score,
+                "memory_score": item.memory_score,
+                "embedding_score": item.embedding_score,
                 "chunk": item.chunk_text,
             }
             for item in result.evidence
@@ -249,7 +399,8 @@ def answer_question(query: str) -> dict:
 - 一次性数字、临时编号、低显著细节更容易下沉；
 - 下层 sealed 内容不会轻易直接命中，减少噪声；
 - 但如果它和上层锚点有关，仍然能通过关系扩展进入证据；
-- 查询本身会改变记忆状态，让常用内容更容易被再次召回。
+- 查询本身会改变记忆状态，让常用内容更容易被再次召回；
+- 启用 embedding 后，语义相似召回会补上规则检索的短板。
 
 这让它更像一个“会变化的长期记忆层”，而不只是静态检索器。
 
@@ -260,6 +411,7 @@ humem-product/
   src/humem_product/
     __init__.py
     cli.py             # command-line interface
+    embeddings.py      # optional OpenAI embedding provider
     memory_space.py    # layered memory graph runtime
     models.py          # dataclasses
     parser.py          # lightweight parser and relation extraction
@@ -285,8 +437,21 @@ python -m unittest discover -s tests
 - 文档写入和来源追踪；
 - answer/evidence 返回；
 - JSON save/load；
-- sealed 底层细节通过上层锚点关系召回。
+- sealed 底层细节通过上层锚点关系召回；
+- fake embedding provider 的语义召回；
+- 旧 store 补齐缺失 embedding。
 
+## 与 V2 研究代码的边界
+
+这个仓库不包含：
+
+- `TrainableMemoryCore`；
+- neural encoder / attention / tensor batch；
+- V2 bootstrap dataset；
+- 训练脚本；
+- PyTorch。
+
+这些仍留在原始研究仓库中。`humem-product` 只保留可以直接上线的本地记忆 RAG 模块。
 
 ## 路线图
 

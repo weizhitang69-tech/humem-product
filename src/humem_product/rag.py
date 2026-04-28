@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable
 from uuid import uuid4
 
+from .embeddings import EmbeddingProvider, cosine_similarity, make_embedding_provider
 from .memory_space import MemorySpace
 from .models import MemoryFragment, MemoryRelation, RetrievalHit
 
@@ -30,6 +31,8 @@ class SourceChunk:
     text: str
     ordinal: int
     metadata: dict[str, Any] = field(default_factory=dict)
+    embedding: list[float] | None = None
+    embedding_model: str | None = None
 
 
 @dataclass(slots=True)
@@ -46,6 +49,8 @@ class MemoryEvidence:
     chunk_id: str | None = None
     title: str | None = None
     chunk_text: str | None = None
+    memory_score: float | None = None
+    embedding_score: float | None = None
 
 
 @dataclass(slots=True)
@@ -72,6 +77,12 @@ class LayeredMemoryRAG:
         top_layer_quota: int = 50,
         bottom_layer_quota: int = 10,
         sealed_bottom_layers: int = 2,
+        embedding_provider: str | EmbeddingProvider | None = None,
+        embedding_model: str = "text-embedding-3-small",
+        embedding_api_key: str | None = None,
+        embedding_dimensions: int | None = None,
+        memory_weight: float = 0.65,
+        embedding_weight: float = 0.35,
     ) -> None:
         self.space = MemorySpace(
             total_layers=total_layers,
@@ -81,6 +92,14 @@ class LayeredMemoryRAG:
         )
         self.documents: dict[str, SourceDocument] = {}
         self.chunks: dict[str, SourceChunk] = {}
+        self.embedding_provider = make_embedding_provider(
+            embedding_provider,
+            model=embedding_model,
+            api_key=embedding_api_key,
+            dimensions=embedding_dimensions,
+        )
+        self.memory_weight = memory_weight
+        self.embedding_weight = embedding_weight
 
     @property
     def total_layers(self) -> int:
@@ -114,9 +133,10 @@ class LayeredMemoryRAG:
         )
         self.documents[doc_id] = document
 
-        for ordinal, chunk_text in enumerate(
-            _chunk_text(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-        ):
+        chunk_texts = _chunk_text(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        embeddings = self._embed_chunks(chunk_texts)
+
+        for ordinal, chunk_text in enumerate(chunk_texts):
             chunk_id = f"{doc_id}:{ordinal}"
             chunk = SourceChunk(
                 chunk_id=chunk_id,
@@ -124,6 +144,8 @@ class LayeredMemoryRAG:
                 text=chunk_text,
                 ordinal=ordinal,
                 metadata={"title": doc_title},
+                embedding=embeddings[ordinal] if embeddings else None,
+                embedding_model=self.embedding_provider.model if embeddings and self.embedding_provider else None,
             )
             self.chunks[chunk_id] = chunk
             fragment_ids = self.space.ingest_sentence(chunk_text)
@@ -150,8 +172,15 @@ class LayeredMemoryRAG:
 
     def retrieve(self, query: str, *, limit: int = 8) -> list[MemoryEvidence]:
         hits = self.space.retrieve(query, limit=max(limit * 4, limit))
-        evidence = [self._hit_to_evidence(hit) for hit in hits]
-        return _dedupe_evidence(evidence)[:limit]
+        memory_evidence = [self._hit_to_evidence(hit) for hit in hits]
+        semantic_evidence = self._semantic_evidence(query, limit=max(limit * 4, limit))
+        evidence = _merge_hybrid_evidence(
+            memory_evidence,
+            semantic_evidence,
+            memory_weight=self.memory_weight,
+            embedding_weight=self.embedding_weight,
+        )
+        return evidence[:limit]
 
     def answer(self, query: str, *, limit: int = 6) -> RAGAnswer:
         evidence = self.retrieve(query, limit=limit)
@@ -161,6 +190,10 @@ class LayeredMemoryRAG:
             "relation_count": len(self.space.relations),
             "layer_histogram": self.layer_histogram(),
             "evidence_count": len(evidence),
+            "embedding_enabled": self.embedding_provider is not None,
+            "embedded_chunks": sum(1 for chunk in self.chunks.values() if chunk.embedding),
+            "memory_weight": self.memory_weight,
+            "embedding_weight": self.embedding_weight,
         }
         return RAGAnswer(
             query=query,
@@ -175,6 +208,23 @@ class LayeredMemoryRAG:
     def decay(self, *, step: float = 0.14, cycles: int = 1) -> None:
         for _ in range(cycles):
             self.space.forget(step=step)
+
+    def embed_missing_chunks(self, *, batch_size: int = 32) -> int:
+        if self.embedding_provider is None:
+            raise ValueError("embedding_provider is required to embed chunks")
+
+        missing = [
+            chunk
+            for chunk in self.chunks.values()
+            if not chunk.embedding or chunk.embedding_model != self.embedding_provider.model
+        ]
+        for offset in range(0, len(missing), batch_size):
+            batch = missing[offset : offset + batch_size]
+            embeddings = self.embedding_provider.embed_texts([chunk.text for chunk in batch])
+            for chunk, embedding in zip(batch, embeddings):
+                chunk.embedding = embedding
+                chunk.embedding_model = self.embedding_provider.model
+        return len(missing)
 
     def layer_histogram(self) -> list[int]:
         histogram = [0] * self.space.total_layers
@@ -216,6 +266,29 @@ class LayeredMemoryRAG:
         instance._restore_space(space_payload)
         return instance
 
+    @classmethod
+    def load_with_embeddings(
+        cls,
+        path: str | Path,
+        *,
+        embedding_provider: str | EmbeddingProvider,
+        embedding_model: str = "text-embedding-3-small",
+        embedding_api_key: str | None = None,
+        embedding_dimensions: int | None = None,
+        memory_weight: float = 0.65,
+        embedding_weight: float = 0.35,
+    ) -> "LayeredMemoryRAG":
+        instance = cls.load(path)
+        instance.embedding_provider = make_embedding_provider(
+            embedding_provider,
+            model=embedding_model,
+            api_key=embedding_api_key,
+            dimensions=embedding_dimensions,
+        )
+        instance.memory_weight = memory_weight
+        instance.embedding_weight = embedding_weight
+        return instance
+
     def _attach_source(
         self,
         fragment_ids: Iterable[str],
@@ -255,7 +328,70 @@ class LayeredMemoryRAG:
             chunk_id=chunk_id,
             title=title,
             chunk_text=chunk_text,
+            memory_score=hit.score,
         )
+
+    def _embed_chunks(self, chunk_texts: list[str]) -> list[list[float]]:
+        if self.embedding_provider is None:
+            return []
+        return self.embedding_provider.embed_texts(chunk_texts)
+
+    def _semantic_evidence(self, query: str, *, limit: int) -> list[MemoryEvidence]:
+        if self.embedding_provider is None:
+            return []
+        embedded_chunks = [chunk for chunk in self.chunks.values() if chunk.embedding]
+        if not embedded_chunks:
+            return []
+
+        query_embedding = self.embedding_provider.embed_query(query)
+        scored = sorted(
+            (
+                (cosine_similarity(query_embedding, chunk.embedding or []), chunk)
+                for chunk in embedded_chunks
+            ),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+
+        evidence: list[MemoryEvidence] = []
+        for similarity, chunk in scored[:limit]:
+            fragment = self._representative_fragment_for_chunk(chunk.chunk_id)
+            if fragment is None:
+                continue
+            document = self.documents.get(chunk.document_id)
+            evidence.append(
+                MemoryEvidence(
+                    fragment_id=fragment.fragment_id,
+                    text=fragment.text,
+                    kind=fragment.kind,
+                    layer=fragment.layer,
+                    score=similarity,
+                    activation=fragment.activation,
+                    strength=fragment.strength,
+                    via_relation="embedding",
+                    document_id=chunk.document_id,
+                    chunk_id=chunk.chunk_id,
+                    title=document.title if document else chunk.metadata.get("title"),
+                    chunk_text=chunk.text,
+                    embedding_score=similarity,
+                )
+            )
+        return evidence
+
+    def _representative_fragment_for_chunk(self, chunk_id: str) -> MemoryFragment | None:
+        candidates: list[MemoryFragment] = []
+        for fragment in self.space.fragments.values():
+            for source in fragment.metadata.get("sources", []):
+                if isinstance(source, dict) and source.get("chunk_id") == chunk_id:
+                    candidates.append(fragment)
+                    break
+        if not candidates:
+            return None
+        return sorted(
+            candidates,
+            key=lambda item: (item.kind == "clause", -item.layer, item.strength, item.activation),
+            reverse=True,
+        )[0]
 
     def _restore_space(self, payload: dict[str, Any]) -> None:
         self.space.fragments.clear()
@@ -347,6 +483,41 @@ def _dedupe_evidence(evidence: list[MemoryEvidence]) -> list[MemoryEvidence]:
         seen.add(key)
         deduped.append(item)
     return deduped
+
+
+def _merge_hybrid_evidence(
+    memory_evidence: list[MemoryEvidence],
+    semantic_evidence: list[MemoryEvidence],
+    *,
+    memory_weight: float,
+    embedding_weight: float,
+) -> list[MemoryEvidence]:
+    merged: dict[tuple[str | None, str], MemoryEvidence] = {}
+    max_memory = max((item.score for item in memory_evidence), default=1.0) or 1.0
+
+    for item in memory_evidence:
+        key = (item.chunk_id, item.text.lower())
+        normalized_memory = item.score / max_memory
+        item.memory_score = item.score
+        item.score = memory_weight * normalized_memory
+        merged[key] = item
+
+    for item in semantic_evidence:
+        key = (item.chunk_id, item.text.lower())
+        normalized_embedding = max(0.0, min(1.0, (item.embedding_score or item.score)))
+        if key in merged:
+            existing = merged[key]
+            existing.embedding_score = item.embedding_score
+            existing.score = existing.score + embedding_weight * normalized_embedding
+            if existing.chunk_text is None:
+                existing.chunk_text = item.chunk_text
+            if existing.via_relation is None and item.via_relation:
+                existing.via_relation = item.via_relation
+        else:
+            item.score = embedding_weight * normalized_embedding
+            merged[key] = item
+
+    return sorted(_dedupe_evidence(list(merged.values())), key=lambda item: item.score, reverse=True)
 
 
 def _compose_answer(query: str, evidence: list[MemoryEvidence]) -> str:

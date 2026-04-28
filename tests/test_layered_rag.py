@@ -13,6 +13,26 @@ sys.path.insert(0, str(ROOT / "src"))
 from humem_product import LayeredMemoryRAG  # noqa: E402
 
 
+class FakeEmbeddingProvider:
+    model = "fake-embedding"
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        return [self._embed(text) for text in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._embed(text)
+
+    def _embed(self, text: str) -> list[float]:
+        lowered = text.lower()
+        launch_terms = ("robot", "launch", "checklist", "deployment", "plan")
+        runbook_terms = ("incident", "response", "runbook")
+        if any(term in lowered for term in launch_terms):
+            return [1.0, 0.0, 0.0]
+        if any(term in lowered for term in runbook_terms):
+            return [0.0, 1.0, 0.0]
+        return [0.0, 0.0, 1.0]
+
+
 class LayeredMemoryRAGTests(unittest.TestCase):
     def test_document_ingestion_returns_answer_with_sources(self) -> None:
         rag = LayeredMemoryRAG()
@@ -53,6 +73,46 @@ class LayeredMemoryRAGTests(unittest.TestCase):
         self.assertEqual(len(restored.documents), 1)
         self.assertGreater(len(answer.evidence), 0)
         self.assertIn("runbook", answer.answer.lower())
+
+    def test_optional_embeddings_enable_semantic_recall(self) -> None:
+        rag = LayeredMemoryRAG(embedding_provider=FakeEmbeddingProvider())
+        rag.add_document(
+            "Alice keeps the robot launch checklist in the blue notebook.",
+            document_id="launch",
+            title="Launch Notes",
+            cool_down_cycles=0,
+        )
+
+        answer = rag.answer("Where is the robotics deployment plan stored?", limit=3)
+
+        self.assertGreater(len(answer.evidence), 0)
+        self.assertIn("blue notebook", answer.answer.lower())
+        self.assertTrue(any(item.embedding_score is not None for item in answer.evidence))
+        stored_chunk = next(iter(rag.chunks.values()))
+        self.assertEqual(stored_chunk.embedding_model, "fake-embedding")
+
+    def test_load_with_embeddings_adds_provider_for_existing_store(self) -> None:
+        rag = LayeredMemoryRAG()
+        rag.add_document(
+            "Alice keeps the robot launch checklist in the blue notebook.",
+            document_id="launch",
+            title="Launch Notes",
+            cool_down_cycles=0,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "memory.json"
+            rag.save(path)
+            restored = LayeredMemoryRAG.load_with_embeddings(
+                path,
+                embedding_provider=FakeEmbeddingProvider(),
+            )
+            embedded_count = restored.embed_missing_chunks()
+            answer = restored.answer("robotics deployment plan", limit=3)
+
+        self.assertGreater(embedded_count, 0)
+        self.assertGreater(len(answer.evidence), 0)
+        self.assertTrue(any(item.embedding_score is not None for item in answer.evidence))
 
     def test_bottom_layer_detail_can_surface_through_anchor(self) -> None:
         rag = LayeredMemoryRAG(total_layers=5, sealed_bottom_layers=2)
