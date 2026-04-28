@@ -441,6 +441,31 @@ python -m unittest discover -s tests
 - fake embedding provider 的语义召回；
 - 旧 store 补齐缺失 embedding。
 
+## 本地评测和可视化
+
+仓库内置一个零依赖评测脚本，会生成 SVG 图和 Markdown 报告：
+
+```bash
+python scripts/evaluate_memory_system.py --output reports
+```
+
+输出文件：
+
+```text
+reports/
+  memory_system_report.md
+  memory_system_metrics.json
+  forgetting_curve.svg
+  recall_reinforcement.svg
+  linked_recall.svg
+```
+
+这组评测会检查：
+
+- 一次性数字记忆是否随 `decay()` 衰减并下沉；
+- 重复查询是否强化目标记忆并提升原始召回分数；
+- sealed 底层细节是否能通过上层锚点关系被带出。
+
 ## 与 V2 研究代码的边界
 
 这个仓库不包含：
