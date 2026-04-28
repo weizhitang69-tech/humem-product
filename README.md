@@ -466,17 +466,6 @@ reports/
 - 重复查询是否强化目标记忆并提升原始召回分数；
 - sealed 底层细节是否能通过上层锚点关系被带出。
 
-## 与 V2 研究代码的边界
-
-这个仓库不包含：
-
-- `TrainableMemoryCore`；
-- neural encoder / attention / tensor batch；
-- V2 bootstrap dataset；
-- 训练脚本；
-- PyTorch。
-
-这些仍留在原始研究仓库中。`humem-product` 只保留可以直接上线的本地记忆 RAG 模块。
 
 ## 路线图
 
