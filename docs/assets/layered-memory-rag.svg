@@ -1,0 +1,154 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
+  <title id="title">HuMem Product Layered Memory RAG Architecture</title>
+  <desc id="desc">A product architecture diagram showing document ingestion, layered memory graph retrieval, answer generation, feedback, decay, and JSON persistence.</desc>
+  <defs>
+    <linearGradient id="header" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#0F766E"/>
+      <stop offset="55%" stop-color="#2563EB"/>
+      <stop offset="100%" stop-color="#7C3AED"/>
+    </linearGradient>
+    <linearGradient id="memory" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ECFDF5"/>
+      <stop offset="55%" stop-color="#EFF6FF"/>
+      <stop offset="100%" stop-color="#F8FAFC"/>
+    </linearGradient>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#0F172A" flood-opacity="0.14"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563EB"/>
+    </marker>
+    <style>
+      .bg { fill: #F8FAFC; }
+      .title { font: 700 34px Arial, sans-serif; fill: #FFFFFF; }
+      .subtitle { font: 400 16px Arial, sans-serif; fill: #DBEAFE; }
+      .label { font: 700 17px Arial, sans-serif; fill: #0F172A; }
+      .small { font: 400 13px Arial, sans-serif; fill: #475569; }
+      .tiny { font: 400 12px Arial, sans-serif; fill: #64748B; }
+      .panel { fill: #FFFFFF; stroke: #CBD5E1; stroke-width: 1.4; rx: 16; filter: url(#shadow); }
+      .module { fill: #FFFFFF; stroke: #94A3B8; stroke-width: 1.2; rx: 12; }
+      .moduleGreen { fill: #ECFDF5; stroke: #14B8A6; stroke-width: 1.4; rx: 12; }
+      .moduleBlue { fill: #EFF6FF; stroke: #2563EB; stroke-width: 1.4; rx: 12; }
+      .moduleViolet { fill: #F5F3FF; stroke: #7C3AED; stroke-width: 1.4; rx: 12; }
+      .moduleAmber { fill: #FFFBEB; stroke: #F59E0B; stroke-width: 1.4; rx: 12; }
+      .arrow { stroke: #475569; stroke-width: 2.1; fill: none; marker-end: url(#arrow); }
+      .arrowBlue { stroke: #2563EB; stroke-width: 2.3; fill: none; marker-end: url(#arrowBlue); }
+      .softArrow { stroke: #94A3B8; stroke-width: 1.8; fill: none; stroke-dasharray: 6 6; marker-end: url(#arrow); }
+      .layerText { font: 700 13px Arial, sans-serif; fill: #0F172A; }
+      .layerHint { font: 400 11px Arial, sans-serif; fill: #475569; }
+      .badge { font: 700 12px Arial, sans-serif; fill: #FFFFFF; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1280" height="760"/>
+  <rect x="0" y="0" width="1280" height="104" fill="url(#header)"/>
+  <text x="56" y="48" class="title">HuMem Product: Layered Memory RAG</text>
+  <text x="58" y="76" class="subtitle">Local deterministic memory with source-aware RAG, layered recall, feedback reinforcement, and JSON persistence</text>
+
+  <rect x="46" y="136" width="260" height="472" class="panel"/>
+  <text x="72" y="174" class="label">1. Ingestion</text>
+  <text x="72" y="198" class="small">Documents, notes, tickets, logs</text>
+
+  <rect x="76" y="230" width="200" height="62" class="moduleGreen"/>
+  <text x="100" y="256" class="label">Document API</text>
+  <text x="100" y="276" class="small">add_document / add_memory</text>
+
+  <rect x="76" y="322" width="200" height="62" class="moduleGreen"/>
+  <text x="100" y="348" class="label">Chunker</text>
+  <text x="100" y="368" class="small">sentence-aware overlap</text>
+
+  <rect x="76" y="414" width="200" height="72" class="moduleGreen"/>
+  <text x="100" y="440" class="label">Parser</text>
+  <text x="100" y="460" class="small">fragments + relations</text>
+  <text x="100" y="478" class="tiny">concept, action, number, term</text>
+
+  <rect x="76" y="516" width="200" height="56" class="moduleAmber"/>
+  <text x="100" y="541" class="label">Source Tracking</text>
+  <text x="100" y="561" class="small">document_id + chunk_id</text>
+
+  <path d="M 276 261 L 352 261" class="arrow"/>
+  <path d="M 276 353 L 352 353" class="arrow"/>
+  <path d="M 276 450 L 352 450" class="arrow"/>
+
+  <rect x="354" y="136" width="420" height="472" class="panel"/>
+  <text x="386" y="174" class="label">2. Layered Memory Space</text>
+  <text x="386" y="198" class="small">Sparse anchors above, dense details below</text>
+
+  <rect x="400" y="235" width="310" height="290" rx="18" fill="url(#memory)" stroke="#CBD5E1" stroke-width="1.4"/>
+  <polygon points="555,252 426,317 684,317" fill="#CCFBF1" stroke="#14B8A6" stroke-width="1.3"/>
+  <polygon points="426,327 398,395 712,395 684,327" fill="#DBEAFE" stroke="#2563EB" stroke-width="1.3"/>
+  <polygon points="398,405 368,508 742,508 712,405" fill="#F1F5F9" stroke="#64748B" stroke-width="1.3"/>
+
+  <text x="498" y="295" class="layerText">Layer 0-1</text>
+  <text x="482" y="312" class="layerHint">easy anchors</text>
+  <text x="493" y="368" class="layerText">Layer 2-4</text>
+  <text x="470" y="386" class="layerHint">working associations</text>
+  <text x="489" y="465" class="layerText">Layer 5-7</text>
+  <text x="452" y="484" class="layerHint">sealed dense details</text>
+
+  <circle cx="530" cy="283" r="7" fill="#0F766E"/>
+  <circle cx="580" cy="292" r="7" fill="#0F766E"/>
+  <circle cx="476" cy="356" r="6" fill="#2563EB"/>
+  <circle cx="561" cy="371" r="6" fill="#2563EB"/>
+  <circle cx="637" cy="354" r="6" fill="#2563EB"/>
+  <circle cx="420" cy="454" r="5" fill="#64748B"/>
+  <circle cx="486" cy="480" r="5" fill="#64748B"/>
+  <circle cx="565" cy="444" r="5" fill="#64748B"/>
+  <circle cx="637" cy="476" r="5" fill="#64748B"/>
+  <circle cx="694" cy="450" r="5" fill="#64748B"/>
+
+  <path d="M 530 283 C 515 322, 489 333, 476 356" class="softArrow"/>
+  <path d="M 580 292 C 612 318, 629 330, 637 354" class="softArrow"/>
+  <path d="M 637 354 C 657 391, 674 420, 694 450" class="softArrow"/>
+  <path d="M 561 371 C 558 400, 559 423, 565 444" class="softArrow"/>
+
+  <rect x="410" y="544" width="140" height="36" class="moduleBlue"/>
+  <text x="430" y="567" class="small">reinforce on read</text>
+  <rect x="570" y="544" width="140" height="36" class="moduleAmber"/>
+  <text x="592" y="567" class="small">decay cycles</text>
+
+  <path d="M 774 275 L 848 275" class="arrow"/>
+  <path d="M 774 462 L 848 462" class="arrow"/>
+
+  <rect x="850" y="136" width="384" height="472" class="panel"/>
+  <text x="882" y="174" class="label">3. Retrieval and Answering</text>
+  <text x="882" y="198" class="small">Query in, evidence-backed answer out</text>
+
+  <rect x="884" y="230" width="300" height="62" class="moduleBlue"/>
+  <text x="908" y="256" class="label">Layered Retriever</text>
+  <text x="908" y="276" class="small">direct match + relation expansion</text>
+
+  <rect x="884" y="322" width="300" height="72" class="moduleViolet"/>
+  <text x="908" y="348" class="label">Evidence Objects</text>
+  <text x="908" y="368" class="small">score, layer, source, chunk, relation</text>
+  <text x="908" y="386" class="tiny">MemoryEvidence[]</text>
+
+  <rect x="884" y="426" width="300" height="72" class="moduleViolet"/>
+  <text x="908" y="452" class="label">Extractive Answer</text>
+  <text x="908" y="472" class="small">RAGAnswer.answer + diagnostics</text>
+  <text x="908" y="490" class="tiny">no LLM required, LLM-ready context</text>
+
+  <rect x="884" y="530" width="300" height="48" class="moduleAmber"/>
+  <text x="908" y="559" class="label">JSON Store</text>
+
+  <path d="M 1034 292 L 1034 322" class="arrowBlue"/>
+  <path d="M 1034 394 L 1034 426" class="arrowBlue"/>
+  <path d="M 1034 498 L 1034 530" class="arrowBlue"/>
+
+  <path d="M 884 554 C 766 670, 544 668, 480 580" class="softArrow"/>
+  <text x="618" y="685" class="tiny">save / load preserves memory graph, sources, chunks, and counters</text>
+
+  <rect x="70" y="652" width="166" height="42" rx="21" fill="#0F766E"/>
+  <text x="96" y="678" class="badge">No Vector DB</text>
+  <rect x="258" y="652" width="184" height="42" rx="21" fill="#2563EB"/>
+  <text x="286" y="678" class="badge">Local and Portable</text>
+  <rect x="464" y="652" width="204" height="42" rx="21" fill="#7C3AED"/>
+  <text x="492" y="678" class="badge">Evidence First RAG</text>
+  <rect x="690" y="652" width="216" height="42" rx="21" fill="#EA580C"/>
+  <text x="720" y="678" class="badge">Memory Changes Over Time</text>
+  <rect x="928" y="652" width="238" height="42" rx="21" fill="#334155"/>
+  <text x="958" y="678" class="badge">V2 Trainable Core Separated</text>
+</svg>
