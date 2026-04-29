@@ -11,6 +11,9 @@ from .models import MemoryFragment, MemoryRelation, RetrievalHit
 from .parser import normalize_text, parse_sentence
 
 
+DEFAULT_LAYER_ACCESS_WEIGHTS = [1.0, 0.88, 0.74, 0.60, 0.46, 0.33, 0.22, 0.14]
+
+
 class MemorySpace:
     def __init__(
         self,
@@ -40,6 +43,7 @@ class MemorySpace:
             if existing_id is None:
                 layer = self._initial_layer(parsed.salience, parsed.kind)
                 x, y = self._semantic_xy(parsed.normalized_text, parsed.kind)
+                depth = self._state_to_depth(layer, parsed.salience, parsed.salience, 0)
                 fragment = MemoryFragment(
                     fragment_id=str(uuid4()),
                     text=parsed.text,
@@ -48,7 +52,8 @@ class MemorySpace:
                     layer=layer,
                     x=x,
                     y=y,
-                    z=self._layer_to_height(layer),
+                    z=self._depth_to_height(depth),
+                    depth=depth,
                     activation=parsed.salience,
                     strength=parsed.salience,
                     ease=0.48 + parsed.salience * 0.3,
@@ -93,6 +98,7 @@ class MemorySpace:
 
         per_layer_matches: dict[int, list[tuple[float, str]]] = defaultdict(list)
         for fragment in self.fragments.values():
+            self._refresh_fragment_depth(fragment)
             score = self._match_score(fragment, query_terms)
             if score <= 0:
                 continue
@@ -125,9 +131,11 @@ class MemorySpace:
                     text=fragment.text,
                     kind=fragment.kind,
                     layer=fragment.layer,
+                    depth=fragment.depth,
                     score=score,
                     activation=fragment.activation,
                     strength=fragment.strength,
+                    accessibility=self.accessibility_weight(fragment.depth),
                     via_relation=via_relation,
                 )
                 for fragment_id, (score, via_relation) in direct_hits.items()
@@ -166,7 +174,7 @@ class MemorySpace:
         fragment.reinforcements += 1
         old_layer = fragment.layer
         fragment.layer = self._move_up(fragment.layer, amount)
-        fragment.z = self._layer_to_height(fragment.layer)
+        self._refresh_fragment_depth(fragment)
         fragment.metadata["last_reinforcement_reason"] = reason
 
         if old_layer != fragment.layer:
@@ -206,8 +214,8 @@ class MemorySpace:
                 fragment.layer = self._move_up(fragment.layer, step * 0.5)
 
             if old_layer != fragment.layer:
-                fragment.z = self._layer_to_height(fragment.layer)
                 any_layer_change = True
+            self._refresh_fragment_depth(fragment)
 
         if any_layer_change:
             self._rebuild_cross_layer_flags()
@@ -259,6 +267,57 @@ class MemorySpace:
             return 1.0
         return 1.0 - layer / (self.total_layers - 1)
 
+    def _depth_to_height(self, depth: float) -> float:
+        if self.total_layers == 1:
+            return 1.0
+        clamped = max(0.0, min(float(depth), self.total_layers - 1))
+        return 1.0 - clamped / (self.total_layers - 1)
+
+    def _state_to_depth(
+        self,
+        layer: int,
+        activation: float,
+        strength: float,
+        retrievals: int,
+    ) -> float:
+        layer = max(0, min(self.total_layers - 1, int(layer)))
+        if self.total_layers == 1:
+            return 0.0
+        lift = activation * 0.18 + strength * 0.08 + math.log1p(max(retrievals, 0)) * 0.05
+        depth = layer + 0.72 - lift
+        lower = float(layer)
+        upper = min(float(layer) + 0.97, float(self.total_layers - 1))
+        return max(lower, min(depth, upper))
+
+    def _refresh_fragment_depth(self, fragment: MemoryFragment) -> None:
+        fragment.layer = max(0, min(self.total_layers - 1, int(fragment.layer)))
+        fragment.depth = self._state_to_depth(
+            fragment.layer,
+            fragment.activation,
+            fragment.strength,
+            fragment.retrievals,
+        )
+        fragment.z = self._depth_to_height(fragment.depth)
+
+    def accessibility_weight(self, depth: float) -> float:
+        if self.total_layers <= 1:
+            return 1.0
+
+        bucket = max(0, min(self.total_layers - 1, int(math.floor(depth))))
+        fraction = max(0.0, min(float(depth) - bucket, 0.999))
+
+        def bucket_weight(index: int) -> float:
+            if index < len(DEFAULT_LAYER_ACCESS_WEIGHTS):
+                return DEFAULT_LAYER_ACCESS_WEIGHTS[index]
+            if self.total_layers <= 1:
+                return DEFAULT_LAYER_ACCESS_WEIGHTS[-1]
+            ratio = index / (self.total_layers - 1)
+            return max(0.08, 1.0 - ratio * 0.88)
+
+        current = bucket_weight(bucket)
+        next_weight = bucket_weight(min(bucket + 1, self.total_layers - 1))
+        return current + (next_weight - current) * fraction
+
     def _match_score(self, fragment: MemoryFragment, query_terms: set[str]) -> float:
         if fragment.normalized_text in query_terms:
             direct = 1.8
@@ -267,8 +326,8 @@ class MemorySpace:
         else:
             return 0.0
 
-        layer_bonus = 1.0 + (self.total_layers - fragment.layer) / self.total_layers
-        return direct * layer_bonus + fragment.activation * 0.25 + fragment.strength * 0.2
+        raw_score = direct + fragment.activation * 0.25 + fragment.strength * 0.2
+        return raw_score * self.accessibility_weight(fragment.depth)
 
     def _expand_connected_retrieval(
         self,
@@ -294,7 +353,9 @@ class MemorySpace:
 
                 source = self.fragments[source_id]
                 source_score = self._match_score(source, {source.normalized_text})
-                score = source_score * relation.weight * (0.72 ** abs(source.layer - target.layer))
+                depth_gap = abs(source.depth - target.depth)
+                target_access = self.accessibility_weight(target.depth)
+                score = source_score * relation.weight * (0.76 ** depth_gap) * (0.55 + target_access * 0.45)
                 if score > candidate_scores.get(target_id, 0.0):
                     candidate_scores[target_id] = score
                     candidate_relations[target_id] = relation.relation_type

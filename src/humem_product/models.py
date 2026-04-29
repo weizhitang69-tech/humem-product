@@ -14,6 +14,7 @@ class MemoryFragment:
     x: float
     y: float
     z: float
+    depth: float = 0.0
     activation: float = 0.0
     strength: float = 0.0
     ease: float = 0.5
@@ -41,9 +42,11 @@ class RetrievalHit:
     text: str
     kind: str
     layer: int
+    depth: float
     score: float
     activation: float
     strength: float
+    accessibility: float
     via_relation: str | None = None
 
 

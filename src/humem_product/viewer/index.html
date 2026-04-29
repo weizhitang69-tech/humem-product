@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HuMem Memory Space</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main id="app">
+      <canvas id="scene" aria-label="HuMem 3D memory graph"></canvas>
+
+      <header class="topbar">
+        <div>
+          <div class="brand">HuMem Memory Space</div>
+          <div class="stats" id="stats">Loading memory graph...</div>
+        </div>
+        <div class="toolbar">
+          <input id="search" type="search" placeholder="搜索记忆" autocomplete="off" />
+          <button id="resetView" type="button" title="重置视角">Reset</button>
+        </div>
+      </header>
+
+      <aside class="layer-panel">
+        <div class="panel-title">Layers</div>
+        <div id="layerToggles" class="layer-list"></div>
+      </aside>
+
+      <aside id="details" class="details-panel">
+        <div class="empty-state">选择一个记忆节点</div>
+      </aside>
+
+      <div id="tooltip" class="tooltip"></div>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

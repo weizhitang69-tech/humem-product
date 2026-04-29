@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from .rag import LayeredMemoryRAG, RAGAnswer
+from .visualization import run_visualization_server
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -36,6 +37,22 @@ def build_parser() -> argparse.ArgumentParser:
     decay.add_argument("--cycles", type=int, default=1)
     decay.add_argument("--step", type=float, default=0.14)
 
+    visualize = subparsers.add_parser("visualize", help="open an interactive 3D memory graph")
+    visualize.add_argument("--store", type=Path, required=True)
+    visualize.add_argument("--host", default="127.0.0.1")
+    visualize.add_argument("--port", type=int, default=8765)
+    visualize.add_argument("--no-open", action="store_true")
+
+    layout = subparsers.add_parser("layout", help="compute continuous memory-space coordinates")
+    layout.add_argument("--store", type=Path, required=True)
+    layout.add_argument("--embedding-provider", choices=["openai"])
+    layout.add_argument("--embedding-model", default="text-embedding-3-small")
+    layout.add_argument("--embed-missing-chunks", action="store_true")
+    layout.add_argument("--embed-fragments", action="store_true")
+    layout.add_argument("--no-embeddings", action="store_true")
+    layout.add_argument("--iterations", type=int, default=120)
+    layout.add_argument("--semantic-neighbors", type=int, default=4)
+
     return parser
 
 
@@ -60,6 +77,48 @@ def main(argv: list[str] | None = None) -> None:
         )
         rag.save(args.store)
         print(f"ingested document={doc_id} fragments={len(rag.space.fragments)} store={args.store}")
+        return
+
+    if args.command == "visualize":
+        try:
+            run_visualization_server(
+                args.store,
+                host=args.host,
+                port=args.port,
+                open_browser=not args.no_open,
+            )
+        except (FileNotFoundError, OSError) as exc:
+            parser.error(str(exc))
+        return
+
+    if args.command == "layout":
+        rag = _load_store(args.store, args.embedding_provider, args.embedding_model)
+        if args.embedding_provider and args.embed_missing_chunks:
+            embedded_count = rag.embed_missing_chunks()
+        else:
+            embedded_count = 0
+        result = rag.layout_memory_space(
+            use_embeddings=not args.no_embeddings,
+            embed_fragments=args.embed_fragments,
+            iterations=args.iterations,
+            semantic_neighbors=args.semantic_neighbors,
+        )
+        rag.save(args.store)
+        print(
+            json.dumps(
+                {
+                    "store": str(args.store),
+                    "layout_model": result.layout_model,
+                    "has_embedding_layout": result.has_embedding_layout,
+                    "nodes": result.node_count,
+                    "semantic_edges": result.semantic_edge_count,
+                    "relation_edges": result.relation_edge_count,
+                    "embedded_chunks": embedded_count,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return
 
     rag = _load_store(
@@ -119,9 +178,13 @@ def _answer_to_dict(answer: RAGAnswer) -> dict[str, object]:
                 "text": item.text,
                 "kind": item.kind,
                 "layer": item.layer,
+                "depth": item.depth,
                 "score": item.score,
+                "accessibility": item.accessibility,
                 "memory_score": item.memory_score,
                 "embedding_score": item.embedding_score,
+                "spatial_score": item.spatial_score,
+                "layout_score": item.layout_score,
                 "via_relation": item.via_relation,
                 "document_id": item.document_id,
                 "chunk_id": item.chunk_id,

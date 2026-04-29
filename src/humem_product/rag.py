@@ -9,6 +9,7 @@ from typing import Any, Iterable
 from uuid import uuid4
 
 from .embeddings import EmbeddingProvider, cosine_similarity, make_embedding_provider
+from .memory_layout import LayoutResult, apply_memory_layout
 from .memory_space import MemorySpace
 from .models import MemoryFragment, MemoryRelation, RetrievalHit
 
@@ -41,9 +42,11 @@ class MemoryEvidence:
     text: str
     kind: str
     layer: int
+    depth: float
     score: float
     activation: float
     strength: float
+    accessibility: float
     via_relation: str | None
     document_id: str | None = None
     chunk_id: str | None = None
@@ -51,6 +54,8 @@ class MemoryEvidence:
     chunk_text: str | None = None
     memory_score: float | None = None
     embedding_score: float | None = None
+    spatial_score: float | None = None
+    layout_score: float | None = None
 
 
 @dataclass(slots=True)
@@ -194,6 +199,7 @@ class LayeredMemoryRAG:
             "embedded_chunks": sum(1 for chunk in self.chunks.values() if chunk.embedding),
             "memory_weight": self.memory_weight,
             "embedding_weight": self.embedding_weight,
+            "accessibility_weighted": True,
         }
         return RAGAnswer(
             query=query,
@@ -226,6 +232,35 @@ class LayeredMemoryRAG:
                 chunk.embedding_model = self.embedding_provider.model
         return len(missing)
 
+    def layout_memory_space(
+        self,
+        *,
+        use_embeddings: bool = True,
+        embed_fragments: bool = False,
+        iterations: int = 120,
+        semantic_neighbors: int = 4,
+    ) -> LayoutResult:
+        fragment_embeddings: dict[str, list[float]] = {}
+        if use_embeddings:
+            if embed_fragments:
+                if self.embedding_provider is None:
+                    raise ValueError("embedding_provider is required to embed fragments")
+                fragments = list(self.space.fragments.values())
+                embeddings = self.embedding_provider.embed_texts([fragment.text for fragment in fragments])
+                fragment_embeddings = {
+                    fragment.fragment_id: embedding
+                    for fragment, embedding in zip(fragments, embeddings)
+                }
+            else:
+                fragment_embeddings = self._existing_fragment_embeddings()
+
+        return apply_memory_layout(
+            self.space,
+            fragment_embeddings=fragment_embeddings,
+            iterations=iterations,
+            semantic_neighbors=semantic_neighbors,
+        )
+
     def layer_histogram(self) -> list[int]:
         histogram = [0] * self.space.total_layers
         for fragment in self.space.fragments.values():
@@ -235,7 +270,7 @@ class LayeredMemoryRAG:
 
     def snapshot(self) -> dict[str, Any]:
         return {
-            "version": 1,
+            "version": 2,
             "memory_space": self.space.snapshot(),
             "documents": [asdict(document) for document in self.documents.values()],
             "chunks": [asdict(chunk) for chunk in self.chunks.values()],
@@ -320,21 +355,35 @@ class LayeredMemoryRAG:
             text=hit.text,
             kind=hit.kind,
             layer=hit.layer,
+            depth=hit.depth,
             score=hit.score,
             activation=hit.activation,
             strength=hit.strength,
+            accessibility=hit.accessibility,
             via_relation=hit.via_relation,
             document_id=document_id,
             chunk_id=chunk_id,
             title=title,
             chunk_text=chunk_text,
             memory_score=hit.score,
+            spatial_score=hit.accessibility,
+            layout_score=hit.accessibility,
         )
 
     def _embed_chunks(self, chunk_texts: list[str]) -> list[list[float]]:
         if self.embedding_provider is None:
             return []
         return self.embedding_provider.embed_texts(chunk_texts)
+
+    def _existing_fragment_embeddings(self) -> dict[str, list[float]]:
+        embeddings: dict[str, list[float]] = {}
+        for fragment in self.space.fragments.values():
+            source = _best_source(fragment.metadata.get("sources"))
+            chunk_id = source.get("chunk_id") if source else None
+            chunk = self.chunks.get(chunk_id or "")
+            if chunk and chunk.embedding:
+                embeddings[fragment.fragment_id] = chunk.embedding
+        return embeddings
 
     def _semantic_evidence(self, query: str, *, limit: int) -> list[MemoryEvidence]:
         if self.embedding_provider is None:
@@ -365,15 +414,19 @@ class LayeredMemoryRAG:
                     text=fragment.text,
                     kind=fragment.kind,
                     layer=fragment.layer,
+                    depth=fragment.depth,
                     score=similarity,
                     activation=fragment.activation,
                     strength=fragment.strength,
+                    accessibility=self.space.accessibility_weight(fragment.depth),
                     via_relation="embedding",
                     document_id=chunk.document_id,
                     chunk_id=chunk.chunk_id,
                     title=document.title if document else chunk.metadata.get("title"),
                     chunk_text=chunk.text,
                     embedding_score=similarity,
+                    spatial_score=self.space.accessibility_weight(fragment.depth),
+                    layout_score=self.space.accessibility_weight(fragment.depth),
                 )
             )
         return evidence
@@ -401,7 +454,10 @@ class LayeredMemoryRAG:
         self.space.in_edges = defaultdict(set)
 
         for item in payload.get("fragments", []):
+            if "depth" not in item:
+                item["depth"] = float(item.get("layer", 0))
             fragment = MemoryFragment(**item)
+            self.space._refresh_fragment_depth(fragment)
             self.space.fragments[fragment.fragment_id] = fragment
             self.space.fragment_index[(fragment.normalized_text, fragment.kind)] = fragment.fragment_id
 
@@ -505,16 +561,19 @@ def _merge_hybrid_evidence(
     for item in semantic_evidence:
         key = (item.chunk_id, item.text.lower())
         normalized_embedding = max(0.0, min(1.0, (item.embedding_score or item.score)))
+        accessible_embedding = normalized_embedding * item.accessibility
         if key in merged:
             existing = merged[key]
             existing.embedding_score = item.embedding_score
-            existing.score = existing.score + embedding_weight * normalized_embedding
+            existing.spatial_score = item.accessibility
+            existing.layout_score = item.layout_score
+            existing.score = existing.score + embedding_weight * accessible_embedding
             if existing.chunk_text is None:
                 existing.chunk_text = item.chunk_text
             if existing.via_relation is None and item.via_relation:
                 existing.via_relation = item.via_relation
         else:
-            item.score = embedding_weight * normalized_embedding
+            item.score = embedding_weight * accessible_embedding
             merged[key] = item
 
     return sorted(_dedupe_evidence(list(merged.values())), key=lambda item: item.score, reverse=True)

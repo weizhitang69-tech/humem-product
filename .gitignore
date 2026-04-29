@@ -10,4 +10,6 @@ dist/
 build/
 *.jsonl
 memory-store.json
+reports/*_store.json
+reports/demo_memory_store.json
 *.log

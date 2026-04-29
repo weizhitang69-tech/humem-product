@@ -416,6 +416,8 @@ humem-product/
     models.py          # dataclasses
     parser.py          # lightweight parser and relation extraction
     rag.py             # product-facing RAG API
+    visualization.py   # local 3D memory graph viewer server
+    viewer/            # bundled browser UI and Three.js assets
   docs/
     assets/
       layered-memory-rag.svg
@@ -466,15 +468,57 @@ reports/
 - 重复查询是否强化目标记忆并提升原始召回分数；
 - sealed 底层细节是否能通过上层锚点关系被带出。
 
+### 3D 交互式记忆图
 
-## 路线图
+如果已经有 JSON store，可以直接启动本地 3D 可视化界面：
 
-- 增加可选 LLM answer composer；
-- 增加 SQLite store；
-- 增加 HTTP service wrapper；
-- 增加更好的中文分词和关系抽取；
-- 增加多租户 namespace；
-- 增加检索 trace 可视化。
+```powershell
+python -m humem_product.cli visualize --store memory-store.json
+```
+
+默认会在本机启动服务并打开浏览器：
+
+```text
+http://127.0.0.1:8765/
+```
+
+可视化界面会读取 store 中的 `fragments`、`relations`、`layer/x/y/z`、`depth`、`activation`、`strength`、`accessibility` 和来源信息，把每个记忆片段显示为 3D 节点，把关系显示为连线。节点的连续高度来自 `depth`，半透明层面仍对应离散 layer；节点大小表达强度，亮度表达激活度；点击节点可以查看正文、来源 chunk、一阶关联记忆和当前可访问性。
+
+如果想把当前 store 的节点坐标写回为连续记忆空间布局，可以先运行：
+
+```powershell
+python -m humem_product.cli layout --store memory-store.json
+```
+
+`layout` 默认不调用外部 embedding 服务，只使用 store 里已有的 embedding 和显式关系；没有 embedding 时会退化为 relation/hash force layout。若需要补齐 chunk embedding，可以显式传入 embedding provider：
+
+```powershell
+python -m humem_product.cli layout --store memory-store.json --embedding-provider openai --embed-missing-chunks
+```
+
+检索时，关键词分数和 embedding 分数会乘以 `accessibility`。上层记忆权重更高，下层记忆权重更低，但下层记忆仍然可以通过高相似度或上层关联锚点被召回。
+
+常用操作：
+
+- 鼠标拖拽旋转视角；
+- 鼠标滚轮平滑缩放；
+- `Shift + 滚轮` 横向平移；
+- `Ctrl + 滚轮` 上下平移；
+- 搜索框可以定位包含关键词的记忆；
+- 左下角可以按层级显示或隐藏节点。
+
+如果还没有 store，可以先导入一段文本：
+
+```powershell
+python -m humem_product.cli ingest notes.txt --store memory-store.json --title "Demo Notes"
+python -m humem_product.cli visualize --store memory-store.json
+```
+
+也可以指定 host、port，或只启动服务不自动打开浏览器：
+
+```powershell
+python -m humem_product.cli visualize --store memory-store.json --host 127.0.0.1 --port 8765 --no-open
+```
 
 ## License
 
