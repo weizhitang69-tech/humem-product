@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import math
 from collections import defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from typing import Any
 from uuid import uuid4
 
@@ -14,6 +14,17 @@ from .parser import normalize_text, parse_sentence
 DEFAULT_LAYER_ACCESS_WEIGHTS = [1.0, 0.88, 0.74, 0.60, 0.46, 0.33, 0.22, 0.14]
 
 
+@dataclass(slots=True)
+class MemoryDynamicsConfig:
+    layer_access_weights: list[float] = field(default_factory=lambda: list(DEFAULT_LAYER_ACCESS_WEIGHTS))
+    base_depth_offset: float = 0.72
+    activation_depth_lift: float = 0.18
+    strength_depth_lift: float = 0.08
+    retrieval_depth_lift: float = 0.05
+    relation_depth_decay: float = 0.76
+    relation_access_floor: float = 0.55
+
+
 class MemorySpace:
     def __init__(
         self,
@@ -21,11 +32,13 @@ class MemorySpace:
         top_layer_quota: int = 50,
         bottom_layer_quota: int = 10,
         sealed_bottom_layers: int = 2,
+        dynamics: MemoryDynamicsConfig | dict[str, Any] | None = None,
     ) -> None:
         self.total_layers = total_layers
         self.top_layer_quota = top_layer_quota
         self.bottom_layer_quota = bottom_layer_quota
         self.sealed_bottom_layers = sealed_bottom_layers
+        self.dynamics = _coerce_dynamics(dynamics)
 
         self.fragments: dict[str, MemoryFragment] = {}
         self.fragment_index: dict[tuple[str, str], str] = {}
@@ -97,12 +110,15 @@ class MemorySpace:
             query_terms = {normalize_text(query)}
 
         per_layer_matches: dict[int, list[tuple[float, str]]] = defaultdict(list)
+        raw_keyword_scores: dict[str, float] = {}
         for fragment in self.fragments.values():
-            self._refresh_fragment_depth(fragment)
-            score = self._match_score(fragment, query_terms)
+            self.refresh_fragment_state(fragment)
+            raw_score = self._raw_match_score(fragment, query_terms)
+            score = raw_score * self.accessibility_weight(fragment.depth)
             if score <= 0:
                 continue
             per_layer_matches[fragment.layer].append((score, fragment.fragment_id))
+            raw_keyword_scores[fragment.fragment_id] = raw_score
 
         selected_ids: set[str] = set()
         direct_hits: dict[str, tuple[float, str | None]] = {}
@@ -136,6 +152,8 @@ class MemorySpace:
                     activation=fragment.activation,
                     strength=fragment.strength,
                     accessibility=self.accessibility_weight(fragment.depth),
+                    raw_keyword_score=raw_keyword_scores.get(fragment_id),
+                    relation_bonus=score if via_relation else 0.0,
                     via_relation=via_relation,
                 )
                 for fragment_id, (score, via_relation) in direct_hits.items()
@@ -174,7 +192,7 @@ class MemorySpace:
         fragment.reinforcements += 1
         old_layer = fragment.layer
         fragment.layer = self._move_up(fragment.layer, amount)
-        self._refresh_fragment_depth(fragment)
+        self.refresh_fragment_state(fragment)
         fragment.metadata["last_reinforcement_reason"] = reason
 
         if old_layer != fragment.layer:
@@ -215,7 +233,7 @@ class MemorySpace:
 
             if old_layer != fragment.layer:
                 any_layer_change = True
-            self._refresh_fragment_depth(fragment)
+            self.refresh_fragment_state(fragment)
 
         if any_layer_change:
             self._rebuild_cross_layer_flags()
@@ -227,6 +245,7 @@ class MemorySpace:
                 "top_layer_quota": self.top_layer_quota,
                 "bottom_layer_quota": self.bottom_layer_quota,
                 "sealed_bottom_layers": self.sealed_bottom_layers,
+                "dynamics": asdict(self.dynamics),
             },
             "fragments": [asdict(fragment) for fragment in self.fragments.values()],
             "relations": [asdict(relation) for relation in self.relations.values()],
@@ -283,13 +302,17 @@ class MemorySpace:
         layer = max(0, min(self.total_layers - 1, int(layer)))
         if self.total_layers == 1:
             return 0.0
-        lift = activation * 0.18 + strength * 0.08 + math.log1p(max(retrievals, 0)) * 0.05
-        depth = layer + 0.72 - lift
+        lift = (
+            activation * self.dynamics.activation_depth_lift
+            + strength * self.dynamics.strength_depth_lift
+            + math.log1p(max(retrievals, 0)) * self.dynamics.retrieval_depth_lift
+        )
+        depth = layer + self.dynamics.base_depth_offset - lift
         lower = float(layer)
         upper = min(float(layer) + 0.97, float(self.total_layers - 1))
         return max(lower, min(depth, upper))
 
-    def _refresh_fragment_depth(self, fragment: MemoryFragment) -> None:
+    def refresh_fragment_state(self, fragment: MemoryFragment) -> None:
         fragment.layer = max(0, min(self.total_layers - 1, int(fragment.layer)))
         fragment.depth = self._state_to_depth(
             fragment.layer,
@@ -299,6 +322,8 @@ class MemorySpace:
         )
         fragment.z = self._depth_to_height(fragment.depth)
 
+    _refresh_fragment_depth = refresh_fragment_state
+
     def accessibility_weight(self, depth: float) -> float:
         if self.total_layers <= 1:
             return 1.0
@@ -307,10 +332,11 @@ class MemorySpace:
         fraction = max(0.0, min(float(depth) - bucket, 0.999))
 
         def bucket_weight(index: int) -> float:
-            if index < len(DEFAULT_LAYER_ACCESS_WEIGHTS):
-                return DEFAULT_LAYER_ACCESS_WEIGHTS[index]
+            weights = self.dynamics.layer_access_weights or DEFAULT_LAYER_ACCESS_WEIGHTS
+            if index < len(weights):
+                return weights[index]
             if self.total_layers <= 1:
-                return DEFAULT_LAYER_ACCESS_WEIGHTS[-1]
+                return weights[-1]
             ratio = index / (self.total_layers - 1)
             return max(0.08, 1.0 - ratio * 0.88)
 
@@ -318,7 +344,7 @@ class MemorySpace:
         next_weight = bucket_weight(min(bucket + 1, self.total_layers - 1))
         return current + (next_weight - current) * fraction
 
-    def _match_score(self, fragment: MemoryFragment, query_terms: set[str]) -> float:
+    def _raw_match_score(self, fragment: MemoryFragment, query_terms: set[str]) -> float:
         if fragment.normalized_text in query_terms:
             direct = 1.8
         elif any(term and term in fragment.normalized_text for term in query_terms):
@@ -326,8 +352,10 @@ class MemorySpace:
         else:
             return 0.0
 
-        raw_score = direct + fragment.activation * 0.25 + fragment.strength * 0.2
-        return raw_score * self.accessibility_weight(fragment.depth)
+        return direct + fragment.activation * 0.25 + fragment.strength * 0.2
+
+    def _match_score(self, fragment: MemoryFragment, query_terms: set[str]) -> float:
+        return self._raw_match_score(fragment, query_terms) * self.accessibility_weight(fragment.depth)
 
     def _expand_connected_retrieval(
         self,
@@ -355,7 +383,12 @@ class MemorySpace:
                 source_score = self._match_score(source, {source.normalized_text})
                 depth_gap = abs(source.depth - target.depth)
                 target_access = self.accessibility_weight(target.depth)
-                score = source_score * relation.weight * (0.76 ** depth_gap) * (0.55 + target_access * 0.45)
+                score = (
+                    source_score
+                    * relation.weight
+                    * (self.dynamics.relation_depth_decay ** depth_gap)
+                    * (self.dynamics.relation_access_floor + target_access * (1.0 - self.dynamics.relation_access_floor))
+                )
                 if score > candidate_scores.get(target_id, 0.0):
                     candidate_scores[target_id] = score
                     candidate_relations[target_id] = relation.relation_type
@@ -414,3 +447,12 @@ class MemorySpace:
             source_layer = self.fragments[relation.source_id].layer
             target_layer = self.fragments[relation.target_id].layer
             relation.cross_layer = source_layer != target_layer
+
+
+def _coerce_dynamics(value: MemoryDynamicsConfig | dict[str, Any] | None) -> MemoryDynamicsConfig:
+    if value is None:
+        return MemoryDynamicsConfig()
+    if isinstance(value, MemoryDynamicsConfig):
+        return value
+    allowed = set(MemoryDynamicsConfig.__dataclass_fields__)
+    return MemoryDynamicsConfig(**{key: val for key, val in value.items() if key in allowed})

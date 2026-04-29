@@ -40,7 +40,7 @@ HuMem Product 是一个可直接嵌入应用的本地分层记忆 RAG 模块。�
 | 抽取式答案 | `answer()` 会基于最佳证据组装一个可直接返回或交给 LLM 的上下文答案 |
 | 读取强化 | 每次 retrieve/answer 会温和强化被命中的片段 |
 | 遗忘衰减 | `decay()` 会让弱激活片段下沉，模拟长期记忆的可提取性变化 |
-| 本地持久化 | `save()` / `load()` 使用 JSON 保存完整记忆图、文档、chunk、embedding 和计数器 |
+| 本地持久化 | 支持 JSON store 和 SQLite store，保存完整记忆图、文档、chunk、embedding、布局和计数器 |
 
 ## 安装
 
@@ -238,6 +238,19 @@ humem-product stats --store memory-store.json
 humem-product decay --store memory-store.json --cycles 3 --step 0.14
 ```
 
+### SQLite 产品化存储
+
+JSON store 适合演示、测试和导出；本地产品化使用可以改用 SQLite：
+
+```powershell
+humem-product migrate --from memory-store.json --to memory.db
+humem-product stats --store memory.db
+humem-product ask "robot launch checklist" --store memory.db
+humem-product visualize --store memory.db
+```
+
+CLI 会按后缀自动选择存储：`.json` 使用 JSON，`.db` / `.sqlite` / `.sqlite3` 使用 SQLite。SQLite 第一版仍然完整加载到内存后事务写回，但数据已经拆成 `documents`、`chunks`、`fragments`、`relations`、`events` 等表，后续可以继续升级为增量写入和服务端 API。
+
 ## 产品接口
 
 ### `LayeredMemoryRAG.add_document`
@@ -331,7 +344,7 @@ rag = LayeredMemoryRAG.load_with_embeddings(
 )
 ```
 
-JSON store 保存：
+JSON / SQLite store 保存：
 
 - memory space 配置；
 - fragments；
@@ -340,7 +353,8 @@ JSON store 保存：
 - chunks；
 - optional chunk embeddings；
 - activation / strength / retrieval counters；
-- relation cross-layer 状态。
+- relation cross-layer 状态；
+- SQLite store 还会保存轻量事件日志，例如 ingest、retrieve、decay、layout、migrate。
 
 ## 后端集成示例
 
@@ -470,7 +484,7 @@ reports/
 
 ### 3D 交互式记忆图
 
-如果已经有 JSON store，可以直接启动本地 3D 可视化界面：
+如果已经有 JSON 或 SQLite store，可以直接启动本地 3D 可视化界面：
 
 ```powershell
 python -m humem_product.cli visualize --store memory-store.json
@@ -490,13 +504,27 @@ http://127.0.0.1:8765/
 python -m humem_product.cli layout --store memory-store.json
 ```
 
-`layout` 默认不调用外部 embedding 服务，只使用 store 里已有的 embedding 和显式关系；没有 embedding 时会退化为 relation/hash force layout。若需要补齐 chunk embedding，可以显式传入 embedding provider：
+`layout` 默认使用 `--embedding-scope chunk`，只复用 store 里已有的 chunk embedding 和显式关系，不会自动调用外部服务；没有 embedding 时会退化为 relation/hash force layout。可选 scope：
 
-```powershell
-python -m humem_product.cli layout --store memory-store.json --embedding-provider openai --embed-missing-chunks
+```text
+chunk     复用来源 chunk embedding，适合低成本语义布局
+fragment 复用或生成 fragment text embedding，布局更细但成本更高
+none      只用显式关系和哈希初始位置
 ```
 
-检索时，关键词分数和 embedding 分数会乘以 `accessibility`。上层记忆权重更高，下层记忆权重更低，但下层记忆仍然可以通过高相似度或上层关联锚点被召回。
+若需要补齐 chunk embedding，可以显式传入 embedding provider 和 `--embed-missing`：
+
+```powershell
+python -m humem_product.cli layout --store memory-store.json --embedding-provider openai --embedding-scope chunk --embed-missing
+```
+
+若要生成并缓存 fragment-level embedding：
+
+```powershell
+python -m humem_product.cli layout --store memory-store.json --embedding-provider openai --embedding-scope fragment --embed-missing
+```
+
+检索时，关键词分数和 embedding 分数会乘以 `accessibility`。上层记忆权重更高，下层记忆权重更低，但下层记忆仍然可以通过高相似度或上层关联锚点被召回；`ask --json` 会输出 `raw_keyword_score`、`raw_embedding_score`、`relation_bonus`、`accessibility` 和 `final_score` 等诊断字段。
 
 常用操作：
 

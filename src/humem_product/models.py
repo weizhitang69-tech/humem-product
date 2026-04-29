@@ -47,6 +47,8 @@ class RetrievalHit:
     activation: float
     strength: float
     accessibility: float
+    raw_keyword_score: float | None = None
+    relation_bonus: float = 0.0
     via_relation: str | None = None
 
 

@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from .rag import LayeredMemoryRAG
+from .storage import load_rag
 
 
 def build_graph_data(rag: LayeredMemoryRAG) -> dict[str, Any]:
@@ -40,6 +41,10 @@ def build_graph_data(rag: LayeredMemoryRAG) -> dict[str, Any]:
                 "chunkText": chunk.text if chunk else None,
                 "layoutModel": fragment.metadata.get("layout_model", "hash-fallback"),
                 "hasEmbeddingLayout": bool(fragment.metadata.get("layout_has_embedding")),
+                "embeddingScope": fragment.metadata.get("layout_embedding_scope", "none"),
+                "semanticEdgeCount": fragment.metadata.get("layout_semantic_edges", 0),
+                "relationEdgeCount": fragment.metadata.get("layout_relation_edges", 0),
+                "layoutUpdatedAt": fragment.metadata.get("layout_updated_at"),
             }
         )
 
@@ -66,6 +71,22 @@ def build_graph_data(rag: LayeredMemoryRAG) -> dict[str, Any]:
         bool(fragment.metadata.get("layout_has_embedding"))
         for fragment in fragments.values()
     )
+    embedding_scopes = {
+        str(fragment.metadata.get("layout_embedding_scope", "none"))
+        for fragment in fragments.values()
+    }
+    semantic_edge_count = max(
+        (int(fragment.metadata.get("layout_semantic_edges", 0)) for fragment in fragments.values()),
+        default=0,
+    )
+    relation_edge_count = max(
+        (int(fragment.metadata.get("layout_relation_edges", 0)) for fragment in fragments.values()),
+        default=0,
+    )
+    layout_updated_at = max(
+        (str(fragment.metadata.get("layout_updated_at", "")) for fragment in fragments.values()),
+        default="",
+    ) or None
 
     return {
         "nodes": nodes,
@@ -79,12 +100,16 @@ def build_graph_data(rag: LayeredMemoryRAG) -> dict[str, Any]:
             "relationCount": len(rag.space.relations),
             "layoutModel": "+".join(sorted(layout_models)) if layout_models else "empty",
             "hasEmbeddingLayout": has_embedding_layout,
+            "embeddingScope": "+".join(sorted(embedding_scopes)) if embedding_scopes else "none",
+            "semanticEdgeCount": semantic_edge_count,
+            "relationEdgeCount": relation_edge_count,
+            "layoutUpdatedAt": layout_updated_at,
         },
     }
 
 
 def load_graph_data(store_path: str | Path) -> dict[str, Any]:
-    rag = LayeredMemoryRAG.load(store_path)
+    rag = load_rag(store_path)
     if _needs_layout(rag):
         rag.layout_memory_space(use_embeddings=True, iterations=60)
     return build_graph_data(rag)

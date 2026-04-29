@@ -12,4 +12,7 @@ build/
 memory-store.json
 reports/*_store.json
 reports/demo_memory_store.json
+*.db
+*.sqlite
+*.sqlite3
 *.log

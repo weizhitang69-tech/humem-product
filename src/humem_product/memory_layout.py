@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from .embeddings import cosine_similarity
 from .memory_space import MemorySpace
@@ -15,15 +16,19 @@ class LayoutResult:
     node_count: int
     semantic_edge_count: int
     relation_edge_count: int
+    embedding_scope: str = "none"
+    layout_updated_at: str | None = None
 
 
 def apply_memory_layout(
     space: MemorySpace,
     *,
     fragment_embeddings: dict[str, list[float]] | None = None,
+    embedding_scope: str = "none",
     iterations: int = 120,
     semantic_neighbors: int = 4,
 ) -> LayoutResult:
+    updated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     fragments = list(space.fragments.values())
     if not fragments:
         return LayoutResult(
@@ -32,6 +37,8 @@ def apply_memory_layout(
             node_count=0,
             semantic_edge_count=0,
             relation_edge_count=0,
+            embedding_scope=embedding_scope,
+            layout_updated_at=updated_at,
         )
 
     for fragment in fragments:
@@ -71,6 +78,10 @@ def apply_memory_layout(
     for fragment in fragments:
         fragment.metadata["layout_model"] = layout_model
         fragment.metadata["layout_has_embedding"] = bool(usable_embeddings)
+        fragment.metadata["layout_embedding_scope"] = embedding_scope if usable_embeddings else "none"
+        fragment.metadata["layout_semantic_edges"] = semantic_edge_count
+        fragment.metadata["layout_relation_edges"] = relation_edge_count
+        fragment.metadata["layout_updated_at"] = updated_at
 
     return LayoutResult(
         layout_model=layout_model,
@@ -78,6 +89,8 @@ def apply_memory_layout(
         node_count=len(fragments),
         semantic_edge_count=semantic_edge_count,
         relation_edge_count=relation_edge_count,
+        embedding_scope=embedding_scope if usable_embeddings else "none",
+        layout_updated_at=updated_at,
     )
 
 

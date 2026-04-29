@@ -196,7 +196,8 @@ function buildLayerControls() {
 function updateStats() {
   const meta = graph.meta;
   const layout = meta.layoutModel || "layout";
-  statsEl.textContent = `${meta.fragmentCount} memories · ${meta.relationCount} relations · ${meta.totalLayers} layers · ${layout}`;
+  const scope = meta.embeddingScope || "none";
+  statsEl.textContent = `${meta.fragmentCount} memories · ${meta.relationCount} relations · ${meta.totalLayers} layers · ${layout} · ${scope}`;
 }
 
 function animate() {
@@ -303,9 +304,12 @@ function renderDetails(node, message = null) {
         <div class="metric"><span class="metric-label">Strength</span><span class="metric-value">${formatNumber(node.strength)}</span></div>
         <div class="metric"><span class="metric-label">Access</span><span class="metric-value">${formatNumber(node.accessibility)}</span></div>
         <div class="metric"><span class="metric-label">Layout</span><span class="metric-value">${escapeHtml(node.layoutModel || "hash")}</span></div>
+        <div class="metric"><span class="metric-label">Scope</span><span class="metric-value">${escapeHtml(node.embeddingScope || "none")}</span></div>
+        <div class="metric"><span class="metric-label">Edges</span><span class="metric-value">${node.semanticEdgeCount || 0}/${node.relationEdgeCount || 0}</span></div>
       </div>
       ${renderSource(node)}
       ${renderChunk(node)}
+      ${renderLayout(node)}
       <div class="section">
         <h2>Related Memories</h2>
         <div class="related-list">
@@ -331,6 +335,15 @@ function renderDetails(node, message = null) {
   detailsEl.querySelectorAll("[data-node-id]").forEach((button) => {
     button.addEventListener("click", () => selectNode(button.dataset.nodeId, true));
   });
+}
+
+function renderLayout(node) {
+  return `
+    <div class="section">
+      <h2>Layout</h2>
+      <p class="source">${escapeHtml(node.layoutModel || "hash-fallback")} · ${escapeHtml(node.embeddingScope || "none")} · semantic ${node.semanticEdgeCount || 0} · relation ${node.relationEdgeCount || 0}${node.layoutUpdatedAt ? ` · ${escapeHtml(node.layoutUpdatedAt)}` : ""}</p>
+    </div>
+  `;
 }
 
 function renderSource(node) {

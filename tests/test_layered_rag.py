@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -12,6 +13,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from humem_product import LayeredMemoryRAG  # noqa: E402
 from humem_product.memory_layout import apply_memory_layout  # noqa: E402
+from humem_product.storage import load_rag, migrate_json_to_sqlite, save_rag  # noqa: E402
 from humem_product.visualization import build_graph_data  # noqa: E402
 
 
@@ -68,6 +70,7 @@ class LayeredMemoryRAGTests(unittest.TestCase):
             rag.save(path)
             payload = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(payload["version"], 2)
+            self.assertIn("dynamics", payload["memory_space"]["config"])
 
             restored = LayeredMemoryRAG.load(path)
             answer = restored.answer("incident response", limit=3)
@@ -90,6 +93,7 @@ class LayeredMemoryRAGTests(unittest.TestCase):
         self.assertGreater(len(answer.evidence), 0)
         self.assertIn("blue notebook", answer.answer.lower())
         self.assertTrue(any(item.embedding_score is not None for item in answer.evidence))
+        self.assertTrue(any(item.raw_embedding_score is not None for item in answer.evidence))
         stored_chunk = next(iter(rag.chunks.values()))
         self.assertEqual(stored_chunk.embedding_model, "fake-embedding")
 
@@ -201,6 +205,8 @@ class LayeredMemoryRAGTests(unittest.TestCase):
         self.assertIn(lower_id, evidence_by_id)
         self.assertGreater(evidence_by_id[upper_id].score, evidence_by_id[lower_id].score)
         self.assertGreater(evidence_by_id[upper_id].accessibility, evidence_by_id[lower_id].accessibility)
+        self.assertIsNotNone(evidence_by_id[upper_id].raw_keyword_score)
+        self.assertEqual(evidence_by_id[upper_id].final_score, evidence_by_id[upper_id].score)
 
     def test_reinforce_and_decay_move_depth(self) -> None:
         rag = LayeredMemoryRAG(total_layers=5)
@@ -244,10 +250,50 @@ class LayeredMemoryRAGTests(unittest.TestCase):
 
         self.assertEqual(result.layout_model, "embedding-force")
         self.assertTrue(result.has_embedding_layout)
+        self.assertEqual(result.embedding_scope, "none")
         self.assertLess(
             _fragment_distance(rag, alpha, beta),
             _fragment_distance(rag, alpha, incident),
         )
+
+    def test_chunk_scope_layout_reuses_existing_chunk_embeddings(self) -> None:
+        rag = LayeredMemoryRAG(embedding_provider=FakeEmbeddingProvider())
+        rag.add_document(
+            "Alice keeps the robot launch checklist in the blue notebook. "
+            "Maya stores the incident response runbook in vault seven.",
+            document_id="mixed",
+            title="Mixed",
+            cool_down_cycles=0,
+        )
+        rag.embedding_provider = None
+
+        result = rag.layout_memory_space(embedding_scope="chunk", iterations=20)
+
+        self.assertTrue(result.has_embedding_layout)
+        self.assertEqual(result.embedding_scope, "chunk")
+        self.assertGreater(result.semantic_edge_count, 0)
+
+    def test_fragment_scope_layout_caches_fragment_embeddings(self) -> None:
+        rag = LayeredMemoryRAG(embedding_provider=FakeEmbeddingProvider())
+        ids = rag.add_memory("robot launch checklist", source="demo")
+        rag.add_memory("incident response runbook", source="demo")
+
+        result = rag.layout_memory_space(
+            embedding_scope="fragment",
+            embed_fragments=True,
+            iterations=20,
+        )
+
+        self.assertTrue(result.has_embedding_layout)
+        self.assertEqual(result.embedding_scope, "fragment")
+        cached = rag.space.fragments[ids[0]].metadata.get("embedding")
+        self.assertIsInstance(cached, list)
+        self.assertEqual(rag.space.fragments[ids[0]].metadata.get("embedding_model"), "fake-embedding")
+
+        rag.embedding_provider = None
+        cached_result = rag.layout_memory_space(embedding_scope="fragment", iterations=20)
+        self.assertTrue(cached_result.has_embedding_layout)
+        self.assertEqual(cached_result.embedding_scope, "fragment")
 
 
 class MemoryVisualizationTests(unittest.TestCase):
@@ -276,6 +322,9 @@ class MemoryVisualizationTests(unittest.TestCase):
         self.assertIn("depth", node)
         self.assertIn("accessibility", node)
         self.assertIn("layoutModel", node)
+        self.assertIn("embeddingScope", node)
+        self.assertIn("semanticEdgeCount", node)
+        self.assertIn("layoutUpdatedAt", graph["meta"])
 
         link = graph["links"][0]
         self.assertIn(link["source"], rag.space.fragments)
@@ -304,6 +353,100 @@ class MemoryVisualizationTests(unittest.TestCase):
         self.assertEqual(graph["meta"]["layerHistogram"], [0, 0, 0, 0])
 
 
+class SQLiteStorageTests(unittest.TestCase):
+    def test_sqlite_round_trip_preserves_memory_graph(self) -> None:
+        rag = LayeredMemoryRAG(embedding_provider=FakeEmbeddingProvider())
+        rag.add_document(
+            "Alice keeps the robot launch checklist in the blue notebook.",
+            document_id="launch",
+            title="Launch Notes",
+            cool_down_cycles=0,
+        )
+        rag.layout_memory_space(embedding_scope="chunk", iterations=20)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "memory.db"
+            save_rag(path, rag, event_type="test_save")
+            restored = load_rag(path)
+
+        self.assertEqual(len(restored.documents), len(rag.documents))
+        self.assertEqual(len(restored.chunks), len(rag.chunks))
+        self.assertEqual(len(restored.space.fragments), len(rag.space.fragments))
+        self.assertEqual(len(restored.space.relations), len(rag.space.relations))
+        self.assertEqual(restored.layer_histogram(), rag.layer_histogram())
+        self.assertTrue(any(chunk.embedding for chunk in restored.chunks.values()))
+        self.assertTrue(all(fragment.depth >= 0 for fragment in restored.space.fragments.values()))
+        self.assertTrue(any("layout_model" in fragment.metadata for fragment in restored.space.fragments.values()))
+
+    def test_json_to_sqlite_migration_preserves_answer_behavior(self) -> None:
+        rag = LayeredMemoryRAG()
+        rag.add_document(
+            "Maya stores the incident response runbook in vault seven.",
+            document_id="ops",
+            title="Ops Runbook",
+            cool_down_cycles=0,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            json_path = Path(temp_dir) / "memory.json"
+            db_path = Path(temp_dir) / "memory.db"
+            rag.save(json_path)
+            migrated = migrate_json_to_sqlite(json_path, db_path)
+            restored = load_rag(db_path)
+            answer = restored.answer("incident response", limit=3)
+
+        self.assertEqual(len(migrated.space.fragments), len(restored.space.fragments))
+        self.assertGreater(len(answer.evidence), 0)
+        self.assertIn("runbook", answer.answer.lower())
+
+    def test_cli_commands_work_with_sqlite_store(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            text_path = Path(temp_dir) / "story.txt"
+            db_path = Path(temp_dir) / "memory.db"
+            text_path.write_text(
+                "Alice keeps the robot launch checklist in the blue notebook. "
+                "Maya stores the incident response runbook in vault seven.",
+                encoding="utf-8",
+            )
+
+            ingest = _run_cli("ingest", str(text_path), "--store", str(db_path), "--title", "Story")
+            stats = _run_cli("stats", "--store", str(db_path))
+            ask = _run_cli("ask", "robot launch checklist", "--store", str(db_path), "--json")
+            layout = _run_cli("layout", "--store", str(db_path), "--embedding-scope", "none", "--iterations", "5")
+
+        stats_payload = json.loads(stats.stdout)
+        ask_payload = json.loads(ask.stdout)
+        layout_payload = json.loads(layout.stdout)
+
+        self.assertIn("ingested document", ingest.stdout)
+        self.assertGreater(stats_payload["fragments"], 0)
+        self.assertGreater(len(ask_payload["evidence"]), 0)
+        self.assertIn("raw_keyword_score", ask_payload["evidence"][0])
+        self.assertEqual(layout_payload["layout_model"], "relation-force")
+
+    def test_visualization_graph_supports_sqlite_store(self) -> None:
+        rag = LayeredMemoryRAG()
+        rag.add_document(
+            "Alice keeps the robot launch checklist in the blue notebook.",
+            document_id="launch",
+            title="Launch Notes",
+            cool_down_cycles=0,
+        )
+        rag.layout_memory_space(embedding_scope="none", iterations=10)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "memory.db"
+            save_rag(db_path, rag, event_type="layout")
+            graph = build_graph_data(load_rag(db_path))
+
+        self.assertGreater(len(graph["nodes"]), 0)
+        self.assertGreater(len(graph["links"]), 0)
+        self.assertIn("depth", graph["nodes"][0])
+        self.assertIn("accessibility", graph["nodes"][0])
+        self.assertIn("layoutModel", graph["nodes"][0])
+        self.assertIn("layoutModel", graph["meta"])
+
+
 def _fragment_distance(rag: LayeredMemoryRAG, left_id: str, right_id: str) -> float:
     left = rag.space.fragments[left_id]
     right = rag.space.fragments[right_id]
@@ -312,6 +455,16 @@ def _fragment_distance(rag: LayeredMemoryRAG, left_id: str, right_id: str) -> fl
         + (left.y - right.y) ** 2
         + (left.z - right.z) ** 2
     ) ** 0.5
+
+
+def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "humem_product.cli", *args],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
 
 
 if __name__ == "__main__":

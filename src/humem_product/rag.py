@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from .embeddings import EmbeddingProvider, cosine_similarity, make_embedding_provider
 from .memory_layout import LayoutResult, apply_memory_layout
-from .memory_space import MemorySpace
+from .memory_space import MemoryDynamicsConfig, MemorySpace
 from .models import MemoryFragment, MemoryRelation, RetrievalHit
 
 
@@ -54,6 +54,10 @@ class MemoryEvidence:
     chunk_text: str | None = None
     memory_score: float | None = None
     embedding_score: float | None = None
+    raw_keyword_score: float | None = None
+    raw_embedding_score: float | None = None
+    relation_bonus: float = 0.0
+    final_score: float | None = None
     spatial_score: float | None = None
     layout_score: float | None = None
 
@@ -88,12 +92,14 @@ class LayeredMemoryRAG:
         embedding_dimensions: int | None = None,
         memory_weight: float = 0.65,
         embedding_weight: float = 0.35,
+        dynamics: MemoryDynamicsConfig | dict[str, Any] | None = None,
     ) -> None:
         self.space = MemorySpace(
             total_layers=total_layers,
             top_layer_quota=top_layer_quota,
             bottom_layer_quota=bottom_layer_quota,
             sealed_bottom_layers=sealed_bottom_layers,
+            dynamics=dynamics,
         )
         self.documents: dict[str, SourceDocument] = {}
         self.chunks: dict[str, SourceChunk] = {}
@@ -237,26 +243,26 @@ class LayeredMemoryRAG:
         *,
         use_embeddings: bool = True,
         embed_fragments: bool = False,
+        embedding_scope: str | None = None,
         iterations: int = 120,
         semantic_neighbors: int = 4,
     ) -> LayoutResult:
+        if embedding_scope is None:
+            embedding_scope = "fragment" if embed_fragments else ("chunk" if use_embeddings else "none")
+        if embedding_scope not in {"chunk", "fragment", "none"}:
+            raise ValueError("embedding_scope must be one of: chunk, fragment, none")
+
         fragment_embeddings: dict[str, list[float]] = {}
-        if use_embeddings:
-            if embed_fragments:
-                if self.embedding_provider is None:
-                    raise ValueError("embedding_provider is required to embed fragments")
-                fragments = list(self.space.fragments.values())
-                embeddings = self.embedding_provider.embed_texts([fragment.text for fragment in fragments])
-                fragment_embeddings = {
-                    fragment.fragment_id: embedding
-                    for fragment, embedding in zip(fragments, embeddings)
-                }
+        if use_embeddings and embedding_scope != "none":
+            if embedding_scope == "fragment":
+                fragment_embeddings = self._fragment_embeddings(embed_missing=embed_fragments)
             else:
                 fragment_embeddings = self._existing_fragment_embeddings()
 
         return apply_memory_layout(
             self.space,
             fragment_embeddings=fragment_embeddings,
+            embedding_scope=embedding_scope,
             iterations=iterations,
             semantic_neighbors=semantic_neighbors,
         )
@@ -366,6 +372,9 @@ class LayeredMemoryRAG:
             title=title,
             chunk_text=chunk_text,
             memory_score=hit.score,
+            raw_keyword_score=hit.raw_keyword_score,
+            relation_bonus=hit.relation_bonus,
+            final_score=hit.score,
             spatial_score=hit.accessibility,
             layout_score=hit.accessibility,
         )
@@ -374,6 +383,30 @@ class LayeredMemoryRAG:
         if self.embedding_provider is None:
             return []
         return self.embedding_provider.embed_texts(chunk_texts)
+
+    def _fragment_embeddings(self, *, embed_missing: bool) -> dict[str, list[float]]:
+        embeddings: dict[str, list[float]] = {}
+        missing: list[MemoryFragment] = []
+        provider_model = self.embedding_provider.model if self.embedding_provider else None
+
+        for fragment in self.space.fragments.values():
+            cached = fragment.metadata.get("embedding")
+            cached_model = fragment.metadata.get("embedding_model")
+            if isinstance(cached, list) and cached and (provider_model is None or cached_model == provider_model):
+                embeddings[fragment.fragment_id] = [float(value) for value in cached]
+            else:
+                missing.append(fragment)
+
+        if missing and embed_missing:
+            if self.embedding_provider is None:
+                raise ValueError("embedding_provider is required to embed fragments")
+            embedded = self.embedding_provider.embed_texts([fragment.text for fragment in missing])
+            for fragment, vector in zip(missing, embedded):
+                fragment.metadata["embedding"] = vector
+                fragment.metadata["embedding_model"] = self.embedding_provider.model
+                embeddings[fragment.fragment_id] = vector
+
+        return embeddings
 
     def _existing_fragment_embeddings(self) -> dict[str, list[float]]:
         embeddings: dict[str, list[float]] = {}
@@ -425,6 +458,8 @@ class LayeredMemoryRAG:
                     title=document.title if document else chunk.metadata.get("title"),
                     chunk_text=chunk.text,
                     embedding_score=similarity,
+                    raw_embedding_score=similarity,
+                    final_score=similarity,
                     spatial_score=self.space.accessibility_weight(fragment.depth),
                     layout_score=self.space.accessibility_weight(fragment.depth),
                 )
@@ -556,6 +591,7 @@ def _merge_hybrid_evidence(
         normalized_memory = item.score / max_memory
         item.memory_score = item.score
         item.score = memory_weight * normalized_memory
+        item.final_score = item.score
         merged[key] = item
 
     for item in semantic_evidence:
@@ -565,15 +601,18 @@ def _merge_hybrid_evidence(
         if key in merged:
             existing = merged[key]
             existing.embedding_score = item.embedding_score
+            existing.raw_embedding_score = item.raw_embedding_score
             existing.spatial_score = item.accessibility
             existing.layout_score = item.layout_score
             existing.score = existing.score + embedding_weight * accessible_embedding
+            existing.final_score = existing.score
             if existing.chunk_text is None:
                 existing.chunk_text = item.chunk_text
             if existing.via_relation is None and item.via_relation:
                 existing.via_relation = item.via_relation
         else:
             item.score = embedding_weight * accessible_embedding
+            item.final_score = item.score
             merged[key] = item
 
     return sorted(_dedupe_evidence(list(merged.values())), key=lambda item: item.score, reverse=True)
