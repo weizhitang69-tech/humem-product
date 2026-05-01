@@ -8,10 +8,13 @@ from pathlib import Path
 from typing import Any, Iterable
 from uuid import uuid4
 
+from .consolidation import MemoryConsolidationResult, build_consolidation_candidates
 from .embeddings import EmbeddingProvider, cosine_similarity, make_embedding_provider
 from .memory_layout import LayoutResult, apply_memory_layout
 from .memory_space import MemoryDynamicsConfig, MemorySpace
 from .models import MemoryFragment, MemoryRelation, RetrievalHit
+from .parser import normalize_text
+from .policy import RetrievalProfile, make_retrieval_profile
 
 
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?\u3002\uff01\uff1f\uff1b;])\s+|\n+")
@@ -70,6 +73,15 @@ class RAGAnswer:
     diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class FeedbackResult:
+    query: str | None
+    positive: list[str]
+    negative: list[str]
+    ignored: list[str]
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+
+
 class LayeredMemoryRAG:
     """Product-facing layered memory RAG module.
 
@@ -90,8 +102,9 @@ class LayeredMemoryRAG:
         embedding_model: str = "text-embedding-3-small",
         embedding_api_key: str | None = None,
         embedding_dimensions: int | None = None,
-        memory_weight: float = 0.65,
-        embedding_weight: float = 0.35,
+        retrieval_profile: str | RetrievalProfile | dict[str, Any] | None = None,
+        memory_weight: float | None = None,
+        embedding_weight: float | None = None,
         dynamics: MemoryDynamicsConfig | dict[str, Any] | None = None,
     ) -> None:
         self.space = MemorySpace(
@@ -109,8 +122,13 @@ class LayeredMemoryRAG:
             api_key=embedding_api_key,
             dimensions=embedding_dimensions,
         )
-        self.memory_weight = memory_weight
-        self.embedding_weight = embedding_weight
+        self.retrieval_profile = make_retrieval_profile(
+            retrieval_profile,
+            memory_weight=memory_weight,
+            embedding_weight=embedding_weight,
+        )
+        self.memory_weight = self.retrieval_profile.memory_weight
+        self.embedding_weight = self.retrieval_profile.embedding_weight
 
     @property
     def total_layers(self) -> int:
@@ -182,7 +200,12 @@ class LayeredMemoryRAG:
         return fragment_ids
 
     def retrieve(self, query: str, *, limit: int = 8) -> list[MemoryEvidence]:
-        hits = self.space.retrieve(query, limit=max(limit * 4, limit))
+        hits = self.space.retrieve(
+            query,
+            limit=max(limit * 4, limit),
+            mutate=self.retrieval_profile.reinforce_on_read,
+            reinforcement_amount=self.retrieval_profile.read_reinforcement,
+        )
         memory_evidence = [self._hit_to_evidence(hit) for hit in hits]
         semantic_evidence = self._semantic_evidence(query, limit=max(limit * 4, limit))
         evidence = _merge_hybrid_evidence(
@@ -205,6 +228,8 @@ class LayeredMemoryRAG:
             "embedded_chunks": sum(1 for chunk in self.chunks.values() if chunk.embedding),
             "memory_weight": self.memory_weight,
             "embedding_weight": self.embedding_weight,
+            "retrieval_profile": self.retrieval_profile.name,
+            "reinforce_on_read": self.retrieval_profile.reinforce_on_read,
             "accessibility_weighted": True,
         }
         return RAGAnswer(
@@ -216,6 +241,71 @@ class LayeredMemoryRAG:
 
     def reinforce(self, fragment_id: str, *, amount: float = 0.6, reason: str = "user_feedback") -> None:
         self.space.reinforce(fragment_id, amount=amount, reason=reason)
+
+    def apply_feedback(
+        self,
+        *,
+        query: str | None = None,
+        positive_fragment_ids: Iterable[str] | None = None,
+        negative_fragment_ids: Iterable[str] | None = None,
+        reason: str = "user_feedback",
+        positive_amount: float | None = None,
+        negative_amount: float | None = None,
+    ) -> FeedbackResult:
+        positive_amount = self.retrieval_profile.feedback_positive_amount if positive_amount is None else positive_amount
+        negative_amount = self.retrieval_profile.feedback_negative_amount if negative_amount is None else negative_amount
+        if positive_amount < 0 or negative_amount < 0:
+            raise ValueError("feedback amounts must be non-negative")
+
+        positive_ids = _unique_strings(positive_fragment_ids or [])
+        positive_id_set = set(positive_ids)
+        negative_ids = [
+            fragment_id
+            for fragment_id in _unique_strings(negative_fragment_ids or [])
+            if fragment_id not in positive_id_set
+        ]
+
+        applied_positive: list[str] = []
+        applied_negative: list[str] = []
+        ignored: list[str] = []
+
+        for fragment_id in positive_ids:
+            fragment = self.space.fragments.get(fragment_id)
+            if fragment is None:
+                ignored.append(fragment_id)
+                continue
+            self.space.reinforce(fragment_id, amount=positive_amount, reason=reason)
+            _record_feedback_metadata(fragment.metadata, query=query, reason=reason, sentiment="positive")
+            applied_positive.append(fragment_id)
+
+        for fragment_id in negative_ids:
+            fragment = self.space.fragments.get(fragment_id)
+            if fragment is None:
+                ignored.append(fragment_id)
+                continue
+            self.space.suppress(
+                fragment_id,
+                amount=negative_amount,
+                reason=reason,
+                demote_layers=self.retrieval_profile.feedback_demote_layers,
+            )
+            _record_feedback_metadata(fragment.metadata, query=query, reason=reason, sentiment="negative")
+            applied_negative.append(fragment_id)
+
+        return FeedbackResult(
+            query=query,
+            positive=applied_positive,
+            negative=applied_negative,
+            ignored=ignored,
+            diagnostics={
+                "retrieval_profile": self.retrieval_profile.name,
+                "positive_amount": positive_amount,
+                "negative_amount": negative_amount,
+                "feedback_demote_layers": self.retrieval_profile.feedback_demote_layers,
+                "fragment_count": len(self.space.fragments),
+                "layer_histogram": self.layer_histogram(),
+            },
+        )
 
     def decay(self, *, step: float = 0.14, cycles: int = 1) -> None:
         for _ in range(cycles):
@@ -237,6 +327,101 @@ class LayeredMemoryRAG:
                 chunk.embedding = embedding
                 chunk.embedding_model = self.embedding_provider.model
         return len(missing)
+
+    def consolidate(
+        self,
+        *,
+        scope: str = "document",
+        max_anchors: int = 8,
+        keywords_per_anchor: int = 5,
+        min_support: int = 3,
+        anchor_layer: int = 0,
+        relation_weight: float = 0.88,
+    ) -> MemoryConsolidationResult:
+        candidates, skipped_groups = build_consolidation_candidates(
+            self.space.fragments.values(),
+            total_layers=self.total_layers,
+            scope=scope,
+            max_anchors=max_anchors,
+            keywords_per_anchor=keywords_per_anchor,
+            min_support=min_support,
+        )
+
+        result = MemoryConsolidationResult(
+            candidates=candidates,
+            skipped_groups=skipped_groups,
+            diagnostics={
+                "scope": scope,
+                "max_anchors": max_anchors,
+                "keywords_per_anchor": keywords_per_anchor,
+                "min_support": min_support,
+                "fragment_count": len(self.space.fragments),
+            },
+        )
+
+        for candidate in candidates:
+            anchor_key = (normalize_text(candidate.anchor_text), "clause")
+            existing_anchor_id = self._existing_consolidation_anchor(scope, candidate.group_key)
+            existed = existing_anchor_id is not None or anchor_key in self.space.fragment_index
+            if existing_anchor_id is not None:
+                anchor_id = existing_anchor_id
+            else:
+                fragment_ids = self.space.ingest_sentence(candidate.anchor_text)
+                anchor_id = self.space.fragment_index.get(anchor_key, fragment_ids[0] if fragment_ids else None)
+            if anchor_id is None:
+                continue
+
+            anchor = self.space.fragments[anchor_id]
+            anchor.layer = max(0, min(anchor_layer, self.total_layers - 1))
+            anchor.metadata["consolidation"] = {
+                "anchor": True,
+                "scope": scope,
+                "group_key": candidate.group_key,
+                "title": candidate.title,
+                "theme_terms": candidate.theme_terms,
+                "support_fragment_ids": candidate.support_fragment_ids,
+                "score": candidate.score,
+            }
+            self.space.refresh_fragment_state(anchor)
+
+            if existed:
+                self.space.reinforce(anchor_id, amount=0.18, reason="consolidation_refresh")
+                result.reinforced_anchor_ids.append(anchor_id)
+            else:
+                self.space.reinforce(anchor_id, amount=0.24, reason="consolidation_anchor")
+                result.created_anchor_ids.append(anchor_id)
+
+            for support_id in candidate.support_fragment_ids:
+                if support_id == anchor_id or support_id not in self.space.fragments:
+                    continue
+                self.space._upsert_relation(
+                    source_id=anchor_id,
+                    target_id=support_id,
+                    relation_type="consolidates",
+                    weight=relation_weight,
+                    metadata={"scope": scope, "group_key": candidate.group_key},
+                )
+                result.support_relations += 1
+
+        self.space._rebuild_cross_layer_flags()
+        result.diagnostics.update(
+            {
+                "created_anchors": len(result.created_anchor_ids),
+                "reinforced_anchors": len(result.reinforced_anchor_ids),
+                "support_relations": result.support_relations,
+                "layer_histogram": self.layer_histogram(),
+            }
+        )
+        return result
+
+    def _existing_consolidation_anchor(self, scope: str, group_key: str) -> str | None:
+        for fragment in self.space.fragments.values():
+            consolidation = fragment.metadata.get("consolidation")
+            if not isinstance(consolidation, dict) or not consolidation.get("anchor"):
+                continue
+            if consolidation.get("scope") == scope and consolidation.get("group_key") == group_key:
+                return fragment.fragment_id
+        return None
 
     def layout_memory_space(
         self,
@@ -276,10 +461,18 @@ class LayeredMemoryRAG:
 
     def snapshot(self) -> dict[str, Any]:
         return {
-            "version": 2,
+            "version": 3,
+            "rag_config": self.rag_config(),
             "memory_space": self.space.snapshot(),
             "documents": [asdict(document) for document in self.documents.values()],
             "chunks": [asdict(chunk) for chunk in self.chunks.values()],
+        }
+
+    def rag_config(self) -> dict[str, Any]:
+        return {
+            "retrieval_profile": self.retrieval_profile.to_dict(),
+            "memory_weight": self.memory_weight,
+            "embedding_weight": self.embedding_weight,
         }
 
     def save(self, path: str | Path) -> None:
@@ -295,7 +488,13 @@ class LayeredMemoryRAG:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         space_payload = payload["memory_space"]
         config = space_payload["config"]
-        instance = cls(**config)
+        rag_config = payload.get("rag_config", {})
+        instance = cls(
+            **config,
+            retrieval_profile=rag_config.get("retrieval_profile"),
+            memory_weight=rag_config.get("memory_weight"),
+            embedding_weight=rag_config.get("embedding_weight"),
+        )
         instance.documents = {
             item["document_id"]: SourceDocument(**item)
             for item in payload.get("documents", [])
@@ -316,8 +515,9 @@ class LayeredMemoryRAG:
         embedding_model: str = "text-embedding-3-small",
         embedding_api_key: str | None = None,
         embedding_dimensions: int | None = None,
-        memory_weight: float = 0.65,
-        embedding_weight: float = 0.35,
+        retrieval_profile: str | RetrievalProfile | dict[str, Any] | None = None,
+        memory_weight: float | None = None,
+        embedding_weight: float | None = None,
     ) -> "LayeredMemoryRAG":
         instance = cls.load(path)
         instance.embedding_provider = make_embedding_provider(
@@ -326,8 +526,14 @@ class LayeredMemoryRAG:
             api_key=embedding_api_key,
             dimensions=embedding_dimensions,
         )
-        instance.memory_weight = memory_weight
-        instance.embedding_weight = embedding_weight
+        if retrieval_profile is not None or memory_weight is not None or embedding_weight is not None:
+            instance.retrieval_profile = make_retrieval_profile(
+                retrieval_profile or instance.retrieval_profile,
+                memory_weight=memory_weight,
+                embedding_weight=embedding_weight,
+            )
+            instance.memory_weight = instance.retrieval_profile.memory_weight
+            instance.embedding_weight = instance.retrieval_profile.embedding_weight
         return instance
 
     def _attach_source(
@@ -511,6 +717,41 @@ def _metadata_list(metadata: dict[str, Any], key: str) -> list[dict[str, Any]]:
         value = []
         metadata[key] = value
     return value
+
+
+def _unique_strings(values: Iterable[str]) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        unique.append(text)
+    return unique
+
+
+def _record_feedback_metadata(
+    metadata: dict[str, Any],
+    *,
+    query: str | None,
+    reason: str,
+    sentiment: str,
+) -> None:
+    feedback = metadata.get("feedback")
+    if not isinstance(feedback, dict):
+        feedback = {}
+        metadata["feedback"] = feedback
+    feedback[sentiment] = int(feedback.get(sentiment, 0)) + 1
+    feedback["last_reason"] = reason
+    if query:
+        feedback["last_query"] = query
+
+    events = feedback.get("events")
+    if not isinstance(events, list):
+        events = []
+        feedback["events"] = events
+    events.append({"sentiment": sentiment, "reason": reason, "query": query})
 
 
 def _best_source(value: Any) -> dict[str, str] | None:

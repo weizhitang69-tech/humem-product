@@ -69,7 +69,8 @@ class LayeredMemoryRAGTests(unittest.TestCase):
             path = Path(temp_dir) / "memory.json"
             rag.save(path)
             payload = json.loads(path.read_text(encoding="utf-8"))
-            self.assertEqual(payload["version"], 2)
+            self.assertEqual(payload["version"], 3)
+            self.assertEqual(payload["rag_config"]["retrieval_profile"]["name"], "balanced")
             self.assertIn("dynamics", payload["memory_space"]["config"])
 
             restored = LayeredMemoryRAG.load(path)
@@ -78,6 +79,110 @@ class LayeredMemoryRAGTests(unittest.TestCase):
         self.assertEqual(len(restored.documents), 1)
         self.assertGreater(len(answer.evidence), 0)
         self.assertIn("runbook", answer.answer.lower())
+
+    def test_retrieval_profile_is_persisted(self) -> None:
+        rag = LayeredMemoryRAG(retrieval_profile="semantic")
+        rag.add_document(
+            "Alice keeps the robot launch checklist in the blue notebook.",
+            document_id="launch",
+            title="Launch Notes",
+            cool_down_cycles=0,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "memory.json"
+            rag.save(path)
+            restored = LayeredMemoryRAG.load(path)
+
+        self.assertEqual(restored.retrieval_profile.name, "semantic")
+        self.assertEqual(restored.memory_weight, 0.45)
+        self.assertEqual(restored.embedding_weight, 0.55)
+
+    def test_archival_profile_does_not_mutate_on_read(self) -> None:
+        rag = LayeredMemoryRAG(retrieval_profile="archival")
+        rag.add_document(
+            "Alice keeps the robot launch checklist in the blue notebook.",
+            document_id="launch",
+            title="Launch Notes",
+            cool_down_cycles=0,
+        )
+        target = next(
+            fragment
+            for fragment in rag.space.fragments.values()
+            if fragment.normalized_text == "checklist"
+        )
+        before = (target.retrievals, target.activation, target.strength, target.layer)
+
+        rag.answer("robot launch checklist", limit=3)
+
+        after = (target.retrievals, target.activation, target.strength, target.layer)
+        self.assertEqual(after, before)
+
+    def test_feedback_reinforces_and_suppresses_fragments(self) -> None:
+        rag = LayeredMemoryRAG()
+        rag.add_document(
+            "alpha memory marker. beta memory marker.",
+            document_id="feedback",
+            title="Feedback",
+            cool_down_cycles=0,
+        )
+        alpha = next(
+            fragment
+            for fragment in rag.space.fragments.values()
+            if fragment.normalized_text == "alpha"
+        )
+        beta = next(
+            fragment
+            for fragment in rag.space.fragments.values()
+            if fragment.normalized_text == "beta"
+        )
+        before_alpha = (alpha.activation, alpha.strength)
+        before_beta = (beta.activation, beta.strength, beta.layer)
+
+        result = rag.apply_feedback(
+            query="memory marker",
+            positive_fragment_ids=[alpha.fragment_id],
+            negative_fragment_ids=[beta.fragment_id, "missing"],
+            reason="unit_test",
+        )
+
+        self.assertEqual(result.positive, [alpha.fragment_id])
+        self.assertEqual(result.negative, [beta.fragment_id])
+        self.assertEqual(result.ignored, ["missing"])
+        self.assertGreater(alpha.activation, before_alpha[0])
+        self.assertGreater(alpha.strength, before_alpha[1])
+        self.assertLess(beta.activation, before_beta[0])
+        self.assertLess(beta.strength, before_beta[1])
+        self.assertGreaterEqual(beta.layer, before_beta[2])
+        self.assertEqual(alpha.metadata["feedback"]["positive"], 1)
+        self.assertEqual(beta.metadata["feedback"]["negative"], 1)
+
+    def test_consolidation_creates_upper_layer_anchor(self) -> None:
+        rag = LayeredMemoryRAG()
+        rag.add_document(
+            "Alice keeps the robot launch checklist in the blue notebook. "
+            "The robot launch checklist helps deployment readiness. "
+            "Alice reviews deployment readiness before launch.",
+            document_id="launch",
+            title="Launch Notes",
+            cool_down_cycles=0,
+        )
+
+        result = rag.consolidate(min_support=3, keywords_per_anchor=4)
+
+        self.assertEqual(len(result.created_anchor_ids), 1)
+        self.assertGreaterEqual(result.support_relations, 3)
+        anchor = rag.space.fragments[result.created_anchor_ids[0]]
+        self.assertEqual(anchor.layer, 0)
+        self.assertTrue(anchor.metadata["consolidation"]["anchor"])
+        self.assertIn("launch", {term.lower() for term in anchor.metadata["consolidation"]["theme_terms"]})
+        self.assertTrue(
+            any(relation.relation_type == "consolidates" for relation in rag.space.relations.values())
+        )
+
+        refreshed = rag.consolidate(min_support=3, keywords_per_anchor=4)
+        self.assertEqual(refreshed.created_anchor_ids, [])
+        self.assertEqual(refreshed.reinforced_anchor_ids, [anchor.fragment_id])
 
     def test_optional_embeddings_enable_semantic_recall(self) -> None:
         rag = LayeredMemoryRAG(embedding_provider=FakeEmbeddingProvider())
@@ -305,6 +410,7 @@ class MemoryVisualizationTests(unittest.TestCase):
             title="Launch Notes",
             cool_down_cycles=0,
         )
+        rag.consolidate(min_support=3, keywords_per_anchor=4)
 
         graph = build_graph_data(rag)
 
@@ -325,6 +431,8 @@ class MemoryVisualizationTests(unittest.TestCase):
         self.assertIn("embeddingScope", node)
         self.assertIn("semanticEdgeCount", node)
         self.assertIn("layoutUpdatedAt", graph["meta"])
+        self.assertEqual(graph["meta"]["retrievalProfile"], "balanced")
+        self.assertGreaterEqual(graph["meta"]["consolidationAnchorCount"], 1)
 
         link = graph["links"][0]
         self.assertIn(link["source"], rag.space.fragments)
@@ -355,7 +463,7 @@ class MemoryVisualizationTests(unittest.TestCase):
 
 class SQLiteStorageTests(unittest.TestCase):
     def test_sqlite_round_trip_preserves_memory_graph(self) -> None:
-        rag = LayeredMemoryRAG(embedding_provider=FakeEmbeddingProvider())
+        rag = LayeredMemoryRAG(embedding_provider=FakeEmbeddingProvider(), retrieval_profile="conservative")
         rag.add_document(
             "Alice keeps the robot launch checklist in the blue notebook.",
             document_id="launch",
@@ -374,6 +482,7 @@ class SQLiteStorageTests(unittest.TestCase):
         self.assertEqual(len(restored.space.fragments), len(rag.space.fragments))
         self.assertEqual(len(restored.space.relations), len(rag.space.relations))
         self.assertEqual(restored.layer_histogram(), rag.layer_histogram())
+        self.assertEqual(restored.retrieval_profile.name, "conservative")
         self.assertTrue(any(chunk.embedding for chunk in restored.chunks.values()))
         self.assertTrue(all(fragment.depth >= 0 for fragment in restored.space.fragments.values()))
         self.assertTrue(any("layout_model" in fragment.metadata for fragment in restored.space.fragments.values()))
@@ -412,16 +521,42 @@ class SQLiteStorageTests(unittest.TestCase):
             ingest = _run_cli("ingest", str(text_path), "--store", str(db_path), "--title", "Story")
             stats = _run_cli("stats", "--store", str(db_path))
             ask = _run_cli("ask", "robot launch checklist", "--store", str(db_path), "--json")
+            ask_payload = json.loads(ask.stdout)
+            feedback = _run_cli(
+                "feedback",
+                "--store",
+                str(db_path),
+                "--query",
+                "robot launch checklist",
+                "--negative",
+                ask_payload["evidence"][0]["fragment_id"],
+                "--json",
+            )
+            consolidate = _run_cli(
+                "consolidate",
+                "--store",
+                str(db_path),
+                "--min-support",
+                "3",
+                "--keywords-per-anchor",
+                "4",
+                "--json",
+            )
             layout = _run_cli("layout", "--store", str(db_path), "--embedding-scope", "none", "--iterations", "5")
 
         stats_payload = json.loads(stats.stdout)
-        ask_payload = json.loads(ask.stdout)
+        feedback_payload = json.loads(feedback.stdout)
+        consolidate_payload = json.loads(consolidate.stdout)
         layout_payload = json.loads(layout.stdout)
 
         self.assertIn("ingested document", ingest.stdout)
         self.assertGreater(stats_payload["fragments"], 0)
         self.assertGreater(len(ask_payload["evidence"]), 0)
         self.assertIn("raw_keyword_score", ask_payload["evidence"][0])
+        self.assertEqual(len(feedback_payload["negative"]), 1)
+        self.assertEqual(feedback_payload["diagnostics"]["retrieval_profile"], "balanced")
+        self.assertEqual(len(consolidate_payload["created_anchor_ids"]), 1)
+        self.assertGreaterEqual(consolidate_payload["support_relations"], 3)
         self.assertEqual(layout_payload["layout_model"], "relation-force")
 
     def test_visualization_graph_supports_sqlite_store(self) -> None:

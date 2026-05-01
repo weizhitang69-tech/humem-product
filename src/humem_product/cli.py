@@ -4,9 +4,13 @@ import argparse
 import json
 from pathlib import Path
 
-from .rag import LayeredMemoryRAG, RAGAnswer
+from .policy import RETRIEVAL_PROFILES, make_retrieval_profile
+from .rag import FeedbackResult, LayeredMemoryRAG, MemoryConsolidationResult, RAGAnswer
 from .storage import load_rag, migrate_json_to_sqlite, save_rag
 from .visualization import run_visualization_server
+
+
+PROFILE_CHOICES = sorted(RETRIEVAL_PROFILES)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -20,6 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("--title")
     ingest.add_argument("--embedding-provider", choices=["openai"])
     ingest.add_argument("--embedding-model", default="text-embedding-3-small")
+    ingest.add_argument("--retrieval-profile", choices=PROFILE_CHOICES)
 
     ask = subparsers.add_parser("ask", help="query a memory store")
     ask.add_argument("query")
@@ -28,7 +33,17 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--json", action="store_true")
     ask.add_argument("--embedding-provider", choices=["openai"])
     ask.add_argument("--embedding-model", default="text-embedding-3-small")
+    ask.add_argument("--retrieval-profile", choices=PROFILE_CHOICES)
     ask.add_argument("--no-auto-embed", action="store_true")
+
+    feedback = subparsers.add_parser("feedback", help="reinforce or suppress retrieved fragments")
+    feedback.add_argument("--store", type=Path, required=True)
+    feedback.add_argument("--query")
+    feedback.add_argument("--positive", action="append", default=[], help="fragment id or comma-separated ids")
+    feedback.add_argument("--negative", action="append", default=[], help="fragment id or comma-separated ids")
+    feedback.add_argument("--reason", default="cli_feedback")
+    feedback.add_argument("--retrieval-profile", choices=PROFILE_CHOICES)
+    feedback.add_argument("--json", action="store_true")
 
     stats = subparsers.add_parser("stats", help="print memory store diagnostics")
     stats.add_argument("--store", type=Path, required=True)
@@ -56,6 +71,14 @@ def build_parser() -> argparse.ArgumentParser:
     layout.add_argument("--iterations", type=int, default=120)
     layout.add_argument("--semantic-neighbors", type=int, default=4)
 
+    consolidate = subparsers.add_parser("consolidate", help="create upper-layer anchors from recurring memories")
+    consolidate.add_argument("--store", type=Path, required=True)
+    consolidate.add_argument("--scope", choices=["document", "chunk", "global"], default="document")
+    consolidate.add_argument("--max-anchors", type=int, default=8)
+    consolidate.add_argument("--keywords-per-anchor", type=int, default=5)
+    consolidate.add_argument("--min-support", type=int, default=3)
+    consolidate.add_argument("--json", action="store_true")
+
     migrate = subparsers.add_parser("migrate", help="migrate a JSON memory store to SQLite")
     migrate.add_argument("--from", dest="source", type=Path, required=True)
     migrate.add_argument("--to", dest="target", type=Path, required=True)
@@ -69,11 +92,12 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "ingest":
         if args.store.exists():
-            rag = _load_store(args.store, args.embedding_provider, args.embedding_model)
+            rag = _load_store(args.store, args.embedding_provider, args.embedding_model, args.retrieval_profile)
         else:
             rag = LayeredMemoryRAG(
                 embedding_provider=args.embedding_provider,
                 embedding_model=args.embedding_model,
+                retrieval_profile=args.retrieval_profile,
             )
         text = args.input.read_text(encoding="utf-8")
         doc_id = rag.add_document(
@@ -146,6 +170,26 @@ def main(argv: list[str] | None = None) -> None:
         )
         return
 
+    if args.command == "consolidate":
+        rag = _load_store(args.store, None, "text-embedding-3-small")
+        result = rag.consolidate(
+            scope=args.scope,
+            max_anchors=args.max_anchors,
+            keywords_per_anchor=args.keywords_per_anchor,
+            min_support=args.min_support,
+        )
+        save_rag(args.store, rag, event_type="consolidate", event_payload=_consolidation_to_dict(result))
+        if args.json:
+            print(json.dumps(_consolidation_to_dict(result), ensure_ascii=False, indent=2))
+            return
+        print(
+            "consolidated "
+            f"created={len(result.created_anchor_ids)} "
+            f"refreshed={len(result.reinforced_anchor_ids)} "
+            f"relations={result.support_relations} store={args.store}"
+        )
+        return
+
     if args.command == "migrate":
         rag = migrate_json_to_sqlite(args.source, args.target)
         print(
@@ -168,6 +212,7 @@ def main(argv: list[str] | None = None) -> None:
         args.store,
         getattr(args, "embedding_provider", None),
         getattr(args, "embedding_model", "text-embedding-3-small"),
+        getattr(args, "retrieval_profile", None),
     )
 
     if args.command == "ask":
@@ -191,6 +236,24 @@ def main(argv: list[str] | None = None) -> None:
             title = item.title or "memory"
             relation = f" via={item.via_relation}" if item.via_relation else ""
             print(f"{index}. [{title} layer={item.layer} score={item.score:.2f}{relation}] {item.text}")
+        return
+
+    if args.command == "feedback":
+        result = rag.apply_feedback(
+            query=args.query,
+            positive_fragment_ids=_parse_fragment_ids(args.positive),
+            negative_fragment_ids=_parse_fragment_ids(args.negative),
+            reason=args.reason,
+        )
+        save_rag(args.store, rag, event_type="feedback", event_payload=_feedback_to_dict(result))
+        if args.json:
+            print(json.dumps(_feedback_to_dict(result), ensure_ascii=False, indent=2))
+            return
+        print(
+            "feedback applied "
+            f"positive={len(result.positive)} negative={len(result.negative)} "
+            f"ignored={len(result.ignored)} store={args.store}"
+        )
         return
 
     if args.command == "stats":
@@ -253,16 +316,60 @@ def _answer_to_dict(answer: RAGAnswer) -> dict[str, object]:
     }
 
 
+def _feedback_to_dict(result: FeedbackResult) -> dict[str, object]:
+    return {
+        "query": result.query,
+        "positive": result.positive,
+        "negative": result.negative,
+        "ignored": result.ignored,
+        "diagnostics": result.diagnostics,
+    }
+
+
+def _consolidation_to_dict(result: MemoryConsolidationResult) -> dict[str, object]:
+    return {
+        "created_anchor_ids": result.created_anchor_ids,
+        "reinforced_anchor_ids": result.reinforced_anchor_ids,
+        "support_relations": result.support_relations,
+        "skipped_groups": result.skipped_groups,
+        "diagnostics": result.diagnostics,
+        "candidates": [
+            {
+                "group_key": candidate.group_key,
+                "title": candidate.title,
+                "anchor_text": candidate.anchor_text,
+                "theme_terms": candidate.theme_terms,
+                "support_fragment_ids": candidate.support_fragment_ids,
+                "score": candidate.score,
+            }
+            for candidate in result.candidates
+        ],
+    }
+
+
+def _parse_fragment_ids(values: list[str]) -> list[str]:
+    fragment_ids: list[str] = []
+    for value in values:
+        fragment_ids.extend(part.strip() for part in value.split(",") if part.strip())
+    return fragment_ids
+
+
 def _load_store(
     store: Path,
     embedding_provider: str | None,
     embedding_model: str,
+    retrieval_profile: str | None = None,
 ) -> LayeredMemoryRAG:
-    return load_rag(
+    rag = load_rag(
         store,
         embedding_provider=embedding_provider,
         embedding_model=embedding_model,
     )
+    if retrieval_profile:
+        rag.retrieval_profile = make_retrieval_profile(retrieval_profile)
+        rag.memory_weight = rag.retrieval_profile.memory_weight
+        rag.embedding_weight = rag.retrieval_profile.embedding_weight
+    return rag
 
 
 if __name__ == "__main__":

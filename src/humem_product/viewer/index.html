@@ -9,21 +9,33 @@
   <body>
     <main id="app">
       <canvas id="scene" aria-label="HuMem 3D memory graph"></canvas>
+      <div class="memory-vignette" aria-hidden="true"></div>
 
       <header class="topbar">
-        <div>
+        <div class="identity">
           <div class="brand">HuMem Memory Space</div>
           <div class="stats" id="stats">Loading memory graph...</div>
+          <div class="vitals" id="vitals"></div>
         </div>
         <div class="toolbar">
+          <div class="mode-switch" aria-label="view mode">
+            <button class="mode-button is-active" type="button" data-mode="organism" title="Organism view">O</button>
+            <button class="mode-button" type="button" data-mode="anchors" title="Anchor focus">A</button>
+            <button class="mode-button" type="button" data-mode="deep" title="Deep memory focus">D</button>
+          </div>
           <input id="search" type="search" placeholder="搜索记忆" autocomplete="off" />
-          <button id="resetView" type="button" title="重置视角">Reset</button>
+          <button id="resetView" class="icon-button" type="button" title="重置视角" aria-label="重置视角">↺</button>
         </div>
       </header>
 
       <aside class="layer-panel">
-        <div class="panel-title">Layers</div>
+        <div class="panel-title">Memory Lamina</div>
         <div id="layerToggles" class="layer-list"></div>
+      </aside>
+
+      <aside class="insight-panel">
+        <div class="panel-title">Recall Field</div>
+        <div id="insights" class="insight-grid"></div>
       </aside>
 
       <aside id="details" class="details-panel">

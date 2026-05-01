@@ -100,7 +100,14 @@ class MemorySpace:
         self._rebuild_cross_layer_flags()
         return fragment_ids
 
-    def retrieve(self, query: str, limit: int = 120) -> list[RetrievalHit]:
+    def retrieve(
+        self,
+        query: str,
+        limit: int = 120,
+        *,
+        mutate: bool = True,
+        reinforcement_amount: float = 0.08,
+    ) -> list[RetrievalHit]:
         query_terms = {
             fragment.normalized_text
             for fragment in parse_sentence(query)[0]
@@ -163,9 +170,11 @@ class MemorySpace:
             reverse=True,
         )
 
-        for hit in ranked[:limit]:
-            self.fragments[hit.fragment_id].retrievals += 1
-            self.reinforce(hit.fragment_id, amount=0.08, reason="retrieval")
+        if mutate:
+            for hit in ranked[:limit]:
+                self.fragments[hit.fragment_id].retrievals += 1
+                if reinforcement_amount > 0:
+                    self.reinforce(hit.fragment_id, amount=reinforcement_amount, reason="retrieval")
 
         return ranked[:limit]
 
@@ -216,6 +225,32 @@ class MemorySpace:
                 _visited=visited,
                 _depth=_depth + 1,
             )
+
+    def suppress(
+        self,
+        fragment_id: str,
+        *,
+        amount: float = 0.32,
+        reason: str = "negative_feedback",
+        demote_layers: int = 1,
+    ) -> None:
+        if fragment_id not in self.fragments:
+            return
+
+        fragment = self.fragments[fragment_id]
+        fragment.activation = max(fragment.activation - amount, 0.0)
+        fragment.strength = max(fragment.strength - amount * 0.9, 0.0)
+        fragment.ease = max(fragment.ease - amount * 0.14, 0.05)
+        fragment.forgettings += 1
+
+        old_layer = fragment.layer
+        if demote_layers > 0 and fragment.layer < self.total_layers - 1:
+            fragment.layer = min(fragment.layer + demote_layers, self.total_layers - 1)
+        self.refresh_fragment_state(fragment)
+        fragment.metadata["last_suppression_reason"] = reason
+
+        if old_layer != fragment.layer:
+            self._rebuild_cross_layer_flags()
 
     def forget(self, step: float = 0.14) -> None:
         any_layer_change = False

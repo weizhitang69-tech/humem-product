@@ -23,6 +23,8 @@ def build_graph_data(rag: LayeredMemoryRAG) -> dict[str, Any]:
         source = _best_source(fragment.metadata.get("sources"))
         chunk_id = source.get("chunkId") if source else None
         chunk = rag.chunks.get(chunk_id or "")
+        consolidation = fragment.metadata.get("consolidation")
+        is_anchor = isinstance(consolidation, dict) and bool(consolidation.get("anchor"))
         nodes.append(
             {
                 "id": fragment.fragment_id,
@@ -39,6 +41,8 @@ def build_graph_data(rag: LayeredMemoryRAG) -> dict[str, Any]:
                 "retrievals": fragment.retrievals,
                 "source": source,
                 "chunkText": chunk.text if chunk else None,
+                "isConsolidationAnchor": is_anchor,
+                "consolidation": consolidation if is_anchor else None,
                 "layoutModel": fragment.metadata.get("layout_model", "hash-fallback"),
                 "hasEmbeddingLayout": bool(fragment.metadata.get("layout_has_embedding")),
                 "embeddingScope": fragment.metadata.get("layout_embedding_scope", "none"),
@@ -83,6 +87,12 @@ def build_graph_data(rag: LayeredMemoryRAG) -> dict[str, Any]:
         (int(fragment.metadata.get("layout_relation_edges", 0)) for fragment in fragments.values()),
         default=0,
     )
+    consolidation_anchor_count = sum(
+        1
+        for fragment in fragments.values()
+        if isinstance(fragment.metadata.get("consolidation"), dict)
+        and bool(fragment.metadata["consolidation"].get("anchor"))
+    )
     layout_updated_at = max(
         (str(fragment.metadata.get("layout_updated_at", "")) for fragment in fragments.values()),
         default="",
@@ -103,7 +113,11 @@ def build_graph_data(rag: LayeredMemoryRAG) -> dict[str, Any]:
             "embeddingScope": "+".join(sorted(embedding_scopes)) if embedding_scopes else "none",
             "semanticEdgeCount": semantic_edge_count,
             "relationEdgeCount": relation_edge_count,
+            "consolidationAnchorCount": consolidation_anchor_count,
             "layoutUpdatedAt": layout_updated_at,
+            "retrievalProfile": rag.retrieval_profile.name,
+            "memoryWeight": rag.memory_weight,
+            "embeddingWeight": rag.embedding_weight,
         },
     }
 

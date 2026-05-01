@@ -14,7 +14,7 @@ from .rag import LayeredMemoryRAG, SourceChunk, SourceDocument
 
 
 SQLITE_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
-STORE_VERSION = 2
+STORE_VERSION = 3
 
 
 def load_rag(
@@ -94,8 +94,14 @@ def _load_sqlite(path: Path) -> LayeredMemoryRAG:
         connection.row_factory = sqlite3.Row
         _ensure_schema(connection)
         meta = connection.execute("SELECT config_json FROM store_meta WHERE id = 1").fetchone()
-        config = json.loads(meta["config_json"]) if meta else {}
-        rag = LayeredMemoryRAG(**config)
+        config_payload = json.loads(meta["config_json"]) if meta else {}
+        space_config, rag_config = _split_config_payload(config_payload)
+        rag = LayeredMemoryRAG(
+            **space_config,
+            retrieval_profile=rag_config.get("retrieval_profile"),
+            memory_weight=rag_config.get("memory_weight"),
+            embedding_weight=rag_config.get("embedding_weight"),
+        )
 
         rag.documents = {
             row["document_id"]: SourceDocument(
@@ -178,7 +184,12 @@ def _save_sqlite(
 
 def _replace_core_tables(connection: sqlite3.Connection, rag: LayeredMemoryRAG) -> None:
     now = _utc_now()
-    config_json = _dumps_json(rag.space.snapshot()["config"])
+    config_json = _dumps_json(
+        {
+            "space": rag.space.snapshot()["config"],
+            "rag": rag.rag_config(),
+        }
+    )
     connection.execute(
         """
         INSERT INTO store_meta (id, version, created_at, updated_at, config_json)
@@ -379,6 +390,12 @@ def _loads_json(value: str | None, default: Any) -> Any:
     if value is None or value == "":
         return default
     return json.loads(value)
+
+
+def _split_config_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    if "space" in payload or "rag" in payload:
+        return dict(payload.get("space", {})), dict(payload.get("rag", {}))
+    return dict(payload), {}
 
 
 def _utc_now() -> str:

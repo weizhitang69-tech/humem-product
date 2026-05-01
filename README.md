@@ -36,11 +36,14 @@ HuMem Product 是一个可直接嵌入应用的本地分层记忆 RAG 模块。�
 | 关系扩展 | 被 sealed 的底层细节不会轻易直接命中，但可以被上层锚点通过关系带出 |
 | 可选 embedding | 默认模型为 `text-embedding-3-small`，embedding 保存在 JSON store 的 chunk 中 |
 | 混合检索 | 默认权重 `memory_weight=0.65`、`embedding_weight=0.35` |
+| 检索策略剖面 | 内置 `balanced`、`conservative`、`semantic`、`exploratory`、`archival`，便于对照实验 |
 | 证据对象 | 查询返回 `MemoryEvidence`，包含来源、层级、分数、关系路径和 chunk |
 | 抽取式答案 | `answer()` 会基于最佳证据组装一个可直接返回或交给 LLM 的上下文答案 |
 | 读取强化 | 每次 retrieve/answer 会温和强化被命中的片段 |
+| 显式反馈 | `apply_feedback()` 可强化有用证据、抑制无用证据，并把反馈写入记忆状态 |
 | 遗忘衰减 | `decay()` 会让弱激活片段下沉，模拟长期记忆的可提取性变化 |
-| 本地持久化 | 支持 JSON store 和 SQLite store，保存完整记忆图、文档、chunk、embedding、布局和计数器 |
+| 记忆整合 | `consolidate()` 会把反复出现或高价值片段压缩成上层主题锚点，并保留证据关系 |
+| 本地持久化 | 支持 JSON store 和 SQLite store，保存完整记忆图、文档、chunk、embedding、布局、计数器和 RAG 策略配置 |
 
 ## 安装
 
@@ -110,6 +113,54 @@ for item in answer.evidence:
 
 rag.save("memory-store.json")
 ```
+
+## 检索策略和反馈闭环
+
+默认策略是 `balanced`。如果你在做研发对照，可以显式选择不同 profile：
+
+```python
+from humem_product import LayeredMemoryRAG
+
+rag = LayeredMemoryRAG(retrieval_profile="semantic")
+```
+
+内置策略：
+
+| Profile | 用途 |
+| --- | --- |
+| `balanced` | 默认行为，分层记忆和 embedding 均衡 |
+| `conservative` | 更信任上层锚点和规则召回，适合高精度场景 |
+| `semantic` | 提高 embedding 相似度权重，适合查询改写和同义表达 |
+| `exploratory` | 更宽松地探索关联，读取强化更温和 |
+| `archival` | 只读检索，不因查询而强化记忆，适合评测和审计 |
+
+反馈会直接改变记忆状态：
+
+```python
+answer = rag.answer("incident response runbook")
+bad_id = answer.evidence[0].fragment_id
+
+rag.apply_feedback(
+    query="incident response runbook",
+    negative_fragment_ids=[bad_id],
+    reason="user_rejected_evidence",
+)
+```
+
+正反馈会强化片段；负反馈会降低片段的 activation / strength / ease，并按 profile 配置把它推向更深层。反馈元数据会保存在 fragment metadata 中，JSON 和 SQLite store 都会持久化这些变化。
+
+当记忆积累到一定规模后，可以运行一次确定性的“整合周期”：
+
+```python
+result = rag.consolidate(
+    scope="document",
+    max_anchors=8,
+    keywords_per_anchor=5,
+    min_support=3,
+)
+```
+
+整合会扫描高激活、高强度、被检索、被正反馈或多来源支持的片段，生成上层 `Consolidated memory` anchor，并用 `consolidates` 关系连接到底层证据。这个过程不调用 LLM，适合作为稳定基线；后续可以把候选生成替换成 embedding 聚类或模型摘要。
 
 ## 快速开始：启用 OpenAI embedding
 
@@ -203,6 +254,14 @@ humem-product ingest notes.txt \
 humem-product ask "robot launch checklist" --store memory-store.json
 ```
 
+用指定 profile 查询：
+
+```bash
+humem-product ask "robotics deployment plan" \
+  --store memory-store.json \
+  --retrieval-profile semantic
+```
+
 启用 embedding 查询。若已有 chunk 没有 embedding，会自动补齐并保存：
 
 ```bash
@@ -226,10 +285,33 @@ humem-product ask "robotics deployment plan" \
 humem-product ask "robot launch checklist" --store memory-store.json --json
 ```
 
+把用户或评测反馈写回记忆状态：
+
+```bash
+humem-product feedback \
+  --store memory-store.json \
+  --query "robot launch checklist" \
+  --positive "<fragment-id>" \
+  --negative "<fragment-id>" \
+  --reason "reviewed_by_user" \
+  --json
+```
+
 查看状态：
 
 ```bash
 humem-product stats --store memory-store.json
+```
+
+执行记忆整合：
+
+```bash
+humem-product consolidate \
+  --store memory-store.json \
+  --scope document \
+  --max-anchors 8 \
+  --min-support 3 \
+  --json
 ```
 
 执行遗忘衰减：
@@ -312,6 +394,32 @@ answer = rag.answer("incident response runbook", limit=6)
 
 `answer()` 不调用 LLM。它返回的是抽取式答案和证据。你可以直接展示，也可以把 `answer.evidence` 拼进自己的 LLM prompt。
 
+### `LayeredMemoryRAG.apply_feedback`
+
+```python
+result = rag.apply_feedback(
+    query="incident response runbook",
+    positive_fragment_ids=["fragment-id-a"],
+    negative_fragment_ids=["fragment-id-b"],
+    reason="human_review",
+)
+```
+
+返回 `FeedbackResult`，包含已应用的 positive / negative fragment id、被忽略的 id，以及当前 profile、反馈强度和层级直方图。正反馈调用强化机制；负反馈会抑制并下沉片段。
+
+### `LayeredMemoryRAG.consolidate`
+
+```python
+result = rag.consolidate(
+    scope="document",
+    max_anchors=8,
+    keywords_per_anchor=5,
+    min_support=3,
+)
+```
+
+返回 `MemoryConsolidationResult`，包含新建或刷新的 anchor id、候选主题、支撑关系数量和诊断信息。`scope` 可以是 `document`、`chunk` 或 `global`。默认算法是确定性的：按 activation、strength、retrievals、source_count、层级可访问性和反馈信号为片段打分，再生成上层主题锚点。
+
 ### `LayeredMemoryRAG.embed_missing_chunks`
 
 ```python
@@ -346,6 +454,7 @@ rag = LayeredMemoryRAG.load_with_embeddings(
 
 JSON / SQLite store 保存：
 
+- RAG config（retrieval profile、memory / embedding weight）；
 - memory space 配置；
 - fragments；
 - relations；
@@ -354,7 +463,7 @@ JSON / SQLite store 保存：
 - optional chunk embeddings；
 - activation / strength / retrieval counters；
 - relation cross-layer 状态；
-- SQLite store 还会保存轻量事件日志，例如 ingest、retrieve、decay、layout、migrate。
+- SQLite store 还会保存轻量事件日志，例如 ingest、retrieve、feedback、decay、layout、migrate。
 
 ## 后端集成示例
 
@@ -429,12 +538,16 @@ humem-product/
     memory_space.py    # layered memory graph runtime
     models.py          # dataclasses
     parser.py          # lightweight parser and relation extraction
+    consolidation.py   # deterministic anchor creation from recurring memories
+    policy.py          # retrieval profiles and feedback defaults
     rag.py             # product-facing RAG API
     visualization.py   # local 3D memory graph viewer server
     viewer/            # bundled browser UI and Three.js assets
   docs/
     assets/
       layered-memory-rag.svg
+    decisions/
+      0001-*.md        # architecture/product decision records
     product-module.md
   tests/
     test_layered_rag.py
@@ -452,10 +565,18 @@ python -m unittest discover -s tests
 
 - 文档写入和来源追踪；
 - answer/evidence 返回；
-- JSON save/load；
+- JSON save/load 和 SQLite round-trip；
 - sealed 底层细节通过上层锚点关系召回；
 - fake embedding provider 的语义召回；
-- 旧 store 补齐缺失 embedding。
+- 旧 store 补齐缺失 embedding；
+- retrieval profile 持久化和 `archival` 只读检索；
+- positive / negative feedback 对记忆状态的影响；
+- consolidation anchor 创建、刷新和支撑关系；
+- CLI ingest / ask / feedback / consolidate / layout 的 SQLite 工作流。
+
+## 决策记录
+
+本轮研发改动的设计取舍记录在 `docs/decisions/`。新增或改变运行时行为、持久化格式、CLI 能力、评测范围时，都应同步补一条 decision record，避免以后只看代码猜意图。
 
 ## 本地评测和可视化
 
@@ -480,7 +601,9 @@ reports/
 
 - 一次性数字记忆是否随 `decay()` 衰减并下沉；
 - 重复查询是否强化目标记忆并提升原始召回分数；
-- sealed 底层细节是否能通过上层锚点关系被带出。
+- sealed 底层细节是否能通过上层锚点关系被带出；
+- negative feedback 是否削弱并下沉被抑制的记忆；
+- consolidation 是否能创建上层 anchor 并连接多个支撑片段。
 
 ### 3D 交互式记忆图
 
@@ -496,7 +619,19 @@ python -m humem_product.cli visualize --store memory-store.json
 http://127.0.0.1:8765/
 ```
 
-可视化界面会读取 store 中的 `fragments`、`relations`、`layer/x/y/z`、`depth`、`activation`、`strength`、`accessibility` 和来源信息，把每个记忆片段显示为 3D 节点，把关系显示为连线。节点的连续高度来自 `depth`，半透明层面仍对应离散 layer；节点大小表达强度，亮度表达激活度；点击节点可以查看正文、来源 chunk、一阶关联记忆和当前可访问性。
+可视化界面会读取 store 中的 `fragments`、`relations`、`layer/x/y/z`、`depth`、`activation`、`strength`、`accessibility` 和来源信息，把每个记忆片段显示为 3D 节点，把关系显示为突触连线。节点的连续高度来自 `depth`，半透明记忆层膜仍对应离散 layer；节点大小表达强度，亮度表达激活度；点击节点可以查看正文、activation 环、来源 chunk、一阶关联记忆和当前可访问性。
+
+新版 viewer 更偏仿生记忆空间：
+
+- 上层/深层以半透明 lamina 呈现，帮助观察“可召回表层”和“下沉痕迹”；
+- 关系以 relation-colored synapse 呈现，并带有流动脉冲；
+- consolidation anchor 使用独立几何体和光环，不再混在普通节点里；
+- 顶部 vitals 展示 activation、strength、access、anchor 数；
+- 左下 `Recall Field` 展示 upper recall、deep trace、anchor density、mean access；
+- `O / A / D` 三个视图模式分别聚焦整体、anchor、深层痕迹；
+- 右侧详情面板展示 memory state、activation ring、consolidation terms、source/chunk 和 synaptic neighbors。
+
+如果 store 已运行 `consolidate`，可视化顶部会显示 anchor 数量；anchor 节点详情会展示 consolidation scope 和主题词。
 
 如果想把当前 store 的节点坐标写回为连续记忆空间布局，可以先运行：
 
