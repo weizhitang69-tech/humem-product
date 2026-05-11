@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
@@ -21,6 +22,8 @@ class ForgetPoint:
     strength: float
     ease: float
     layer: int
+    retention: float
+    forgetting_model: str
 
 
 @dataclass(slots=True)
@@ -65,6 +68,51 @@ class ConsolidationProbeResult:
     anchor_terms: list[str]
 
 
+@dataclass(slots=True)
+class SemanticNavigationProbeResult:
+    query: str
+    top_k: int
+    exact_chunk_ids: list[str]
+    ann_chunk_ids: list[str]
+    overlap: int
+    exact_ms: float
+    ann_ms: float
+    ann_strategy: str
+    ann_build_count: int
+    ann_visited: int
+
+
+@dataclass(slots=True)
+class RetentionComparisonResult:
+    cycles: int
+    plain_activation_ratio: float
+    reinforced_activation_ratio: float
+    plain_layer: int
+    reinforced_layer: int
+    plain_retention: float
+    reinforced_retention: float
+
+
+class EvaluationEmbeddingProvider:
+    model = "evaluation-embedding"
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        return [self._embed(text) for text in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._embed(text)
+
+    def _embed(self, text: str) -> list[float]:
+        lowered = text.lower()
+        if any(term in lowered for term in ("robot", "robotics", "launch", "deployment", "checklist")):
+            return [1.0, 0.05, 0.0, 0.0]
+        if any(term in lowered for term in ("incident", "runbook", "vault", "response")):
+            return [0.0, 1.0, 0.05, 0.0]
+        if any(term in lowered for term in ("budget", "forecast", "invoice", "finance")):
+            return [0.0, 0.0, 1.0, 0.05]
+        return [0.05, 0.0, 0.0, 1.0]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate local HuMem Product evaluation visuals")
     parser.add_argument("--output", type=Path, default=ROOT / "reports")
@@ -77,6 +125,8 @@ def main() -> None:
     linked_recall = run_linked_recall_probe()
     feedback_probe = run_feedback_probe()
     consolidation_probe = run_consolidation_probe()
+    semantic_navigation_probe = run_semantic_navigation_probe()
+    retention_comparison = run_retention_comparison_probe()
 
     write_forgetting_svg(args.output / "forgetting_curve.svg", forget_curve)
     write_recall_svg(args.output / "recall_reinforcement.svg", recall_curve)
@@ -88,6 +138,8 @@ def main() -> None:
         linked_recall=linked_recall,
         feedback_probe=feedback_probe,
         consolidation_probe=consolidation_probe,
+        semantic_navigation_probe=semantic_navigation_probe,
+        retention_comparison=retention_comparison,
     )
     write_json(
         args.output / "memory_system_metrics.json",
@@ -96,6 +148,8 @@ def main() -> None:
         linked_recall=linked_recall,
         feedback_probe=feedback_probe,
         consolidation_probe=consolidation_probe,
+        semantic_navigation_probe=semantic_navigation_probe,
+        retention_comparison=retention_comparison,
     )
 
     print(f"report: {args.output / 'memory_system_report.md'}")
@@ -127,6 +181,8 @@ def run_forgetting_curve() -> list[ForgetPoint]:
                 strength=fragment.strength,
                 ease=fragment.ease,
                 layer=fragment.layer,
+                retention=rag.space.retention_for_fragment(fragment, step=0.14),
+                forgetting_model=rag.space.dynamics.forgetting_model,
             )
         )
         rag.decay(step=0.14, cycles=1)
@@ -267,6 +323,104 @@ def run_consolidation_probe() -> ConsolidationProbeResult:
     )
 
 
+def run_semantic_navigation_probe() -> SemanticNavigationProbeResult:
+    query = "robotics deployment plan"
+    top_k = 8
+    exact = build_semantic_probe_rag("exact")
+    ann = build_semantic_probe_rag("ann")
+
+    start = time.perf_counter()
+    exact_evidence = exact._semantic_evidence(query, limit=top_k)
+    exact_ms = (time.perf_counter() - start) * 1000
+
+    start = time.perf_counter()
+    ann_evidence = ann._semantic_evidence(query, limit=top_k)
+    ann_ms = (time.perf_counter() - start) * 1000
+    ann_stats = ann.semantic_navigation_stats()
+
+    exact_chunk_ids = [item.chunk_id or "" for item in exact_evidence]
+    ann_chunk_ids = [item.chunk_id or "" for item in ann_evidence]
+    return SemanticNavigationProbeResult(
+        query=query,
+        top_k=top_k,
+        exact_chunk_ids=exact_chunk_ids,
+        ann_chunk_ids=ann_chunk_ids,
+        overlap=len(set(exact_chunk_ids) & set(ann_chunk_ids)),
+        exact_ms=exact_ms,
+        ann_ms=ann_ms,
+        ann_strategy=str(ann_stats["last_strategy"]),
+        ann_build_count=int(ann_stats["build_count"]),
+        ann_visited=int(ann_stats["last_visited"]),
+    )
+
+
+def run_retention_comparison_probe() -> RetentionComparisonResult:
+    cycles = 6
+    rag = LayeredMemoryRAG(total_layers=5)
+    reinforced_id = rag.add_memory("reinforcedretention", source="evaluation")[0]
+    plain_id = rag.add_memory("plainretention", source="evaluation")[0]
+    for fragment_id in (reinforced_id, plain_id):
+        fragment = rag.space.fragments[fragment_id]
+        fragment.layer = 2
+        fragment.activation = 0.8
+        fragment.strength = 0.8
+        fragment.ease = 0.7
+        fragment.retrievals = 0
+        fragment.reinforcements = 1
+        fragment.forgettings = 0
+        rag.space.refresh_fragment_state(fragment)
+
+    rag.reinforce(reinforced_id, amount=0.5)
+    reinforced_start = rag.space.fragments[reinforced_id].activation
+    plain_start = rag.space.fragments[plain_id].activation
+    rag.decay(step=0.14, cycles=cycles)
+
+    reinforced = rag.space.fragments[reinforced_id]
+    plain = rag.space.fragments[plain_id]
+    return RetentionComparisonResult(
+        cycles=cycles,
+        plain_activation_ratio=plain.activation / plain_start,
+        reinforced_activation_ratio=reinforced.activation / reinforced_start,
+        plain_layer=plain.layer,
+        reinforced_layer=reinforced.layer,
+        plain_retention=rag.space.retention_for_fragment(plain, step=0.14),
+        reinforced_retention=rag.space.retention_for_fragment(reinforced, step=0.14),
+    )
+
+
+def build_semantic_probe_rag(mode: str) -> LayeredMemoryRAG:
+    rag = LayeredMemoryRAG(
+        embedding_provider=EvaluationEmbeddingProvider(),
+        semantic_index=mode,
+        semantic_index_min_items=1,
+        semantic_index_m=6,
+        semantic_index_ef_construction=32,
+        semantic_index_ef_search=24,
+    )
+    documents = [
+        ("launch-a", "Robot launch checklist lives in the blue notebook."),
+        ("launch-b", "Deployment readiness for the robot team uses the blue notebook."),
+        ("launch-c", "Robotics launch planning includes battery checks and rollback notes."),
+        ("launch-d", "The deployment checklist tracks sensor calibration before launch."),
+        ("incident-a", "Incident response runbook stays in vault seven."),
+        ("incident-b", "The response runbook covers pager escalation and service rollback."),
+        ("finance-a", "Budget forecast invoices are reviewed every Friday."),
+        ("finance-b", "Finance notes track procurement and invoice approvals."),
+        ("archive-a", "Garden meeting notes mention seating and lunch preferences."),
+        ("archive-b", "Design archive captures color tokens and typography names."),
+        ("archive-c", "Support digest records onboarding questions and account names."),
+        ("archive-d", "Planning notes include venue logistics and travel windows."),
+    ]
+    for document_id, text in documents:
+        rag.add_document(
+            text,
+            document_id=document_id,
+            title=document_id,
+            cool_down_cycles=0,
+        )
+    return rag
+
+
 def find_fragment_id(
     rag: LayeredMemoryRAG,
     predicate: Callable[[str, str], bool],
@@ -310,8 +464,8 @@ def write_forgetting_svg(path: Path, points: list[ForgetPoint]) -> None:
 
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
   <rect width="100%" height="100%" fill="#F8FAFC"/>
-  <text x="38" y="42" font-family="Arial" font-size="26" font-weight="700" fill="#0F172A">Forgetting Curve: one-time code 45123789</text>
-  <text x="38" y="68" font-family="Arial" font-size="14" fill="#475569">Activation and strength decay over cycles; layer bars grow as the fragment sinks deeper.</text>
+  <text x="38" y="42" font-family="Arial" font-size="26" font-weight="700" fill="#0F172A">Ebbinghaus Forgetting Curve: one-time code 45123789</text>
+  <text x="38" y="68" font-family="Arial" font-size="14" fill="#475569">Retention curves drive activation decay; HuMem state still decides layer movement.</text>
   <line x1="{margin}" y1="{height - margin}" x2="{width - margin}" y2="{height - margin}" stroke="#334155" stroke-width="1.5"/>
   <line x1="{margin}" y1="{margin}" x2="{margin}" y2="{height - margin}" stroke="#334155" stroke-width="1.5"/>
   {"".join(layer_bars)}
@@ -411,6 +565,8 @@ def write_report(
     linked_recall: LinkedRecallResult,
     feedback_probe: FeedbackProbeResult,
     consolidation_probe: ConsolidationProbeResult,
+    semantic_navigation_probe: SemanticNavigationProbeResult,
+    retention_comparison: RetentionComparisonResult,
 ) -> None:
     start_forget = forget_curve[0]
     end_forget = forget_curve[-1]
@@ -435,9 +591,14 @@ Generated by `scripts/evaluate_memory_system.py`.
 | Forgetting activation | {start_forget.activation:.3f} -> {end_forget.activation:.3f} |
 | Forgetting strength | {start_forget.strength:.3f} -> {end_forget.strength:.3f} |
 | Forgetting layer | {start_forget.layer} -> {end_forget.layer} |
+| Forgetting model | {start_forget.forgetting_model} |
+| Forgetting retention | {start_forget.retention:.3f} -> {end_forget.retention:.3f} |
 | Recall top score | {start_recall.top_score:.3f} -> {end_recall.top_score:.3f} |
 | Recall target activation | {start_recall.target_activation:.3f} -> {end_recall.target_activation:.3f} |
 | Recall target strength | {start_recall.target_strength:.3f} -> {end_recall.target_strength:.3f} |
+| Reinforced retention ratio | {retention_comparison.reinforced_activation_ratio:.3f} over {retention_comparison.cycles} cycles |
+| Plain retention ratio | {retention_comparison.plain_activation_ratio:.3f} over {retention_comparison.cycles} cycles |
+| Retention comparison layers | reinforced {retention_comparison.reinforced_layer} / plain {retention_comparison.plain_layer} |
 | Linked bottom detail found | {linked_recall.found} |
 | Linked recall relation | {linked_recall.via_relation} |
 | Feedback suppressed activation | {feedback_probe.before_activation:.3f} -> {feedback_probe.after_activation:.3f} |
@@ -445,14 +606,20 @@ Generated by `scripts/evaluate_memory_system.py`.
 | Consolidation anchors created | {consolidation_probe.created_anchors} |
 | Consolidation support relations | {consolidation_probe.support_relations} |
 | Consolidation anchor layer | {consolidation_probe.anchor_layer} |
+| Semantic navigation overlap@{semantic_navigation_probe.top_k} | {semantic_navigation_probe.overlap}/{semantic_navigation_probe.top_k} |
+| Semantic navigation ANN strategy | {semantic_navigation_probe.ann_strategy} |
+| Semantic navigation ANN visited | {semantic_navigation_probe.ann_visited} |
+| Semantic navigation timing | exact {semantic_navigation_probe.exact_ms:.3f} ms / ann {semantic_navigation_probe.ann_ms:.3f} ms |
 
 ## How To Read This
 
-- The forgetting curve should trend downward for activation/strength while the layer moves deeper.
+- The forgetting curve should follow an Ebbinghaus-style retention drop while HuMem state moves weak memories deeper.
+- The retention comparison should show reinforced memory keeping a higher activation ratio than an otherwise similar plain memory.
 - The recall reinforcement curve should trend upward or stay high as repeated reads strengthen useful memory.
 - The linked recall probe should show a bottom-layer detail surfacing through a relation, proving sealed details are not simply lost.
 - The feedback probe should weaken or demote the suppressed memory after negative feedback.
 - The consolidation probe should create an upper-layer anchor connected to several support fragments.
+- The semantic navigation probe compares exact cosine scan with the runtime ANN candidate graph; it reports overlap and search effort rather than claiming speed on this small fixture.
 """
     path.write_text(report, encoding="utf-8")
 
@@ -465,6 +632,8 @@ def write_json(
     linked_recall: LinkedRecallResult,
     feedback_probe: FeedbackProbeResult,
     consolidation_probe: ConsolidationProbeResult,
+    semantic_navigation_probe: SemanticNavigationProbeResult,
+    retention_comparison: RetentionComparisonResult,
 ) -> None:
     payload = {
         "forget_curve": [asdict(point) for point in forget_curve],
@@ -479,6 +648,8 @@ def write_json(
         },
         "feedback_probe": asdict(feedback_probe),
         "consolidation_probe": asdict(consolidation_probe),
+        "semantic_navigation_probe": asdict(semantic_navigation_probe),
+        "retention_comparison": asdict(retention_comparison),
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 

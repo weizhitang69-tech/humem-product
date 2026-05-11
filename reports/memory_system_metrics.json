@@ -5,155 +5,181 @@
       "activation": 0.78,
       "strength": 0.78,
       "ease": 0.714,
-      "layer": 3
+      "layer": 3,
+      "retention": 1.0,
+      "forgetting_model": "ebbinghaus"
     },
     {
       "cycle": 1,
-      "activation": 0.64,
-      "strength": 0.6890000000000001,
-      "ease": 0.7028,
-      "layer": 3
+      "activation": 0.617798109243467,
+      "strength": 0.7183632815125175,
+      "ease": 0.6813350346153382,
+      "layer": 3,
+      "retention": 0.7898406550813178,
+      "forgetting_model": "ebbinghaus"
     },
     {
       "cycle": 2,
-      "activation": 0.5,
-      "strength": 0.5980000000000001,
-      "ease": 0.6916,
-      "layer": 3
+      "activation": 0.4879620633128596,
+      "strength": 0.6609943939831214,
+      "ease": 0.6498334712154586,
+      "layer": 3,
+      "retention": 0.6205390645424609,
+      "forgetting_model": "ebbinghaus"
     },
     {
       "cycle": 3,
-      "activation": 0.36,
-      "strength": 0.5070000000000001,
-      "ease": 0.6804,
-      "layer": 3
+      "activation": 0.38438870908474565,
+      "strength": 0.6076801377528611,
+      "ease": 0.6194884993005566,
+      "layer": 3,
+      "retention": 0.48513548300923404,
+      "forgetting_model": "ebbinghaus"
     },
     {
       "cycle": 4,
-      "activation": 0.21999999999999997,
-      "strength": 0.4160000000000001,
-      "ease": 0.6692,
-      "layer": 4
+      "activation": 0.3020357165050773,
+      "strength": 0.5582072340407669,
+      "ease": 0.5902897202321916,
+      "layer": 3,
+      "retention": 0.3775681869998923,
+      "forgetting_model": "ebbinghaus"
     },
     {
       "cycle": 5,
-      "activation": 0.07999999999999996,
-      "strength": 0.32500000000000007,
-      "ease": 0.658,
-      "layer": 5
+      "activation": 0.23675935659018624,
+      "strength": 0.5123638484954127,
+      "ease": 0.5622233967221255,
+      "layer": 3,
+      "retention": 0.2926431067663222,
+      "forgetting_model": "ebbinghaus"
     },
     {
       "cycle": 6,
-      "activation": 0.0,
-      "strength": 0.23400000000000004,
-      "ease": 0.6468,
-      "layer": 6
+      "activation": 0.18517178404692414,
+      "strength": 0.4699409813204092,
+      "ease": 0.5352727285417437,
+      "layer": 4,
+      "retention": 0.2259747514214379,
+      "forgetting_model": "ebbinghaus"
     },
     {
       "cycle": 7,
-      "activation": 0.0,
-      "strength": 0.14300000000000002,
-      "ease": 0.6356,
-      "layer": 7
+      "activation": 0.1445167314011156,
+      "strength": 0.43073370865168653,
+      "ease": 0.5094181468863256,
+      "layer": 5,
+      "retention": 0.17390931568175405,
+      "forgetting_model": "ebbinghaus"
     },
     {
       "cycle": 8,
-      "activation": 0.0,
-      "strength": 0.052000000000000005,
-      "ease": 0.6244000000000001,
-      "layer": 7
+      "activation": 0.11256226479649267,
+      "strength": 0.3945422656640271,
+      "ease": 0.48463762008487793,
+      "layer": 6,
+      "retention": 0.133438995375229,
+      "forgetting_model": "ebbinghaus"
     },
     {
       "cycle": 9,
-      "activation": 0.0,
-      "strength": 0.0,
-      "ease": 0.6132000000000001,
-      "layer": 7
+      "activation": 0.08750909009468782,
+      "strength": 0.3611729673100621,
+      "ease": 0.46090696384141033,
+      "layer": 7,
+      "retention": 0.10211448691429192,
+      "forgetting_model": "ebbinghaus"
     },
     {
       "cycle": 10,
-      "activation": 0.0,
-      "strength": 0.0,
-      "ease": 0.6020000000000001,
-      "layer": 7
+      "activation": 0.06791281988044358,
+      "strength": 0.33043896744267176,
+      "ease": 0.4382001498703835,
+      "layer": 7,
+      "retention": 0.0779606649049678,
+      "forgetting_model": "ebbinghaus"
     },
     {
       "cycle": 11,
-      "activation": 0.0,
-      "strength": 0.0,
-      "ease": 0.5908000000000001,
-      "layer": 7
+      "activation": 0.05261860342486207,
+      "strength": 0.30216086120465785,
+      "ease": 0.4164896075890803,
+      "layer": 7,
+      "retention": 0.059398688060064035,
+      "forgetting_model": "ebbinghaus"
     },
     {
       "cycle": 12,
-      "activation": 0.0,
-      "strength": 0.0,
-      "ease": 0.5796000000000001,
-      "layer": 7
+      "activation": 0.04429273199742566,
+      "strength": 0.2839926491944963,
+      "ease": 0.4019913025496393,
+      "layer": 7,
+      "retention": 0.05,
+      "forgetting_model": "ebbinghaus"
     }
   ],
   "recall_curve": [
     {
       "attempt": 1,
-      "top_score": 1.16303110816,
-      "target_activation": 0.5599999999999999,
-      "target_strength": 0.6420000000000001,
+      "top_score": 1.1592530895418376,
+      "target_activation": 0.5546163099474861,
+      "target_strength": 0.7076768893054832,
       "target_layer": 2,
       "evidence_count": 4
     },
     {
       "attempt": 2,
-      "top_score": 1.393087943479689,
-      "target_activation": 0.6399999999999999,
-      "target_strength": 0.7060000000000002,
+      "top_score": 1.3889864194880457,
+      "target_activation": 0.6346163099474861,
+      "target_strength": 0.7716768893054833,
       "target_layer": 1,
       "evidence_count": 4
     },
     {
       "attempt": 3,
-      "top_score": 1.7039166312266458,
-      "target_activation": 0.7199999999999999,
-      "target_strength": 0.7700000000000002,
+      "top_score": 1.7147446091258587,
+      "target_activation": 0.714616309947486,
+      "target_strength": 0.8356768893054833,
       "target_layer": 0,
       "evidence_count": 4
     },
     {
       "attempt": 4,
-      "top_score": 2.016335008999779,
-      "target_activation": 0.7999999999999998,
-      "target_strength": 0.8340000000000003,
+      "top_score": 2.0285778019252447,
+      "target_activation": 0.794616309947486,
+      "target_strength": 0.8996768893054834,
       "target_layer": 0,
       "evidence_count": 4
     },
     {
       "attempt": 5,
-      "top_score": 2.0553030319319734,
-      "target_activation": 0.8799999999999998,
-      "target_strength": 0.8980000000000004,
+      "top_score": 2.067606091025429,
+      "target_activation": 0.874616309947486,
+      "target_strength": 0.9636768893054835,
       "target_layer": 0,
       "evidence_count": 4
     },
     {
       "attempt": 6,
-      "top_score": 2.0939737932510845,
-      "target_activation": 0.9599999999999997,
-      "target_strength": 0.9620000000000004,
+      "top_score": 2.1063342308980397,
+      "target_activation": 0.9546163099474859,
+      "target_strength": 1.0276768893054835,
       "target_layer": 0,
       "evidence_count": 4
     },
     {
       "attempt": 7,
-      "top_score": 2.1324926457805065,
-      "target_activation": 1.0399999999999998,
-      "target_strength": 1.0260000000000005,
+      "top_score": 2.1449084692651854,
+      "target_activation": 1.0346163099474859,
+      "target_strength": 1.0916768893054836,
       "target_layer": 0,
       "evidence_count": 4
     },
     {
       "attempt": 8,
-      "top_score": 2.170945592601279,
-      "target_activation": 1.1199999999999999,
-      "target_strength": 1.0900000000000005,
+      "top_score": 2.1834153433826864,
+      "target_activation": 1.114616309947486,
+      "target_strength": 1.1556768893054836,
       "target_layer": 0,
       "evidence_count": 4
     }
@@ -210,5 +236,44 @@
       "notebook",
       "launch"
     ]
+  },
+  "semantic_navigation_probe": {
+    "query": "robotics deployment plan",
+    "top_k": 8,
+    "exact_chunk_ids": [
+      "launch-a:0",
+      "launch-b:0",
+      "launch-c:0",
+      "launch-d:0",
+      "incident-a:0",
+      "incident-b:0",
+      "archive-a:0",
+      "archive-b:0"
+    ],
+    "ann_chunk_ids": [
+      "launch-b:0",
+      "launch-c:0",
+      "launch-d:0",
+      "launch-a:0",
+      "archive-a:0",
+      "archive-b:0",
+      "archive-c:0",
+      "archive-d:0"
+    ],
+    "overlap": 6,
+    "exact_ms": 0.16060000052675605,
+    "ann_ms": 0.5709999823011458,
+    "ann_strategy": "ann",
+    "ann_build_count": 1,
+    "ann_visited": 12
+  },
+  "retention_comparison": {
+    "cycles": 6,
+    "plain_activation_ratio": 0.18734436163895118,
+    "reinforced_activation_ratio": 0.21988966378932306,
+    "plain_layer": 3,
+    "reinforced_layer": 0,
+    "plain_retention": 0.17360838683485022,
+    "reinforced_retention": 0.20117044759827693
   }
 }

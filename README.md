@@ -1,5 +1,186 @@
 # HuMem Product
 
+## EventRAG v4 主线
+
+HuMem Product 现在新增 `EventRAG` 作为事件中心记忆主线。旧的
+`LayeredMemoryRAG` 仍保留为 legacy baseline 和 v3 迁移来源，但新的记忆
+思路已经从“碎片分层 + 任意 3D 坐标”改为：
+
+- LLM 将输入抽取为事件 chunk；
+- 每个事件保存 `main_label`、输入创建时间 `captured_at`、有序结构化子标签和 `compressed_trace`；
+- 子标签覆盖 `when/who/action/object/place/state/cause/outcome/intent` 等角色；
+- embedding 只写入主标签和子标签 `embedding_text`，不再默认 embedding 完整原文；
+- 检索时先由 LLM 生成关键问题、多个检索词、目标槽位/角色和召回精度，再做关键词与向量混合召回；
+- 遗忘不是删除，而是基于 wall-clock Ebbinghaus 难度提高召回门槛；
+- v4 viewer 的竖直轴是时间，水平平面是 embedding 语义二维投影。
+
+快速示例：
+
+```python
+from humem_product import EventRAG
+
+rag = EventRAG(
+    llm_provider="openai-compatible",
+    llm_model="your-chat-model",
+    embedding_provider="openai",
+)
+
+rag.remember(
+    "我上个月本来打算申请一笔消费贷买电脑，但是因为实习 offer 还没确定，所以暂时没申请。"
+    "现在 offer 已经下来了，我想重新看看额度。"
+)
+
+answer = rag.answer("我之前为什么没申请贷款？")
+print(answer.answer)
+```
+
+CLI v4：
+
+```powershell
+humem-product remember "..." --store memory-v4.json --llm-model your-chat-model --embedding-provider openai
+humem-product ask "我之前为什么没申请贷款？" --store memory-v4.json --llm-model your-chat-model --embedding-provider openai
+humem-product migrate-v4 --from memory-store.json --to memory-v4.json --llm-model your-chat-model --embedding-provider openai
+```
+
+SQLite v4 store 可以持久化 HNSW 索引。索引对象是 `embedding_items`
+（主标签和子标签），并会按 role 建子索引来保留 `from_where/to_where`
+这类方向性：
+
+```powershell
+humem-product index --store memory-v4.db --semantic-index ann
+humem-product ask "我从哪里出发？" --store memory-v4.db --semantic-index ann --llm-model your-chat-model --embedding-provider openai
+```
+
+SQLite v4 stores now include database-core operations around EventRAG:
+
+```powershell
+humem-product collection create --store memory-v4.db finance --schema-json "{\"allowed_roles\":[\"when\",\"who\",\"cause\",\"action\",\"state\",\"intent\"],\"required_roles\":[]}"
+humem-product remember "..." --store memory-v4.db --collection finance --llm-model your-chat-model --embedding-provider openai
+humem-product ask "..." --store memory-v4.db --collection finance --filter-json "{\"where\":{\"metadata.user_id\":{\"eq\":\"u1\"}}}" --llm-model your-chat-model --embedding-provider openai
+humem-product delete --store memory-v4.db --event-id <event_id>
+humem-product compact --store memory-v4.db --purge-deleted
+humem-product backup --store memory-v4.db --to memory-v4.backup.db
+```
+
+These operations keep HNSW as a rebuildable candidate index: new memories are
+added incrementally, deletes are tombstoned immediately, and `compact` rebuilds
+a clean graph.
+
+## EventRAG 逻辑和算法
+
+EventRAG 的核心目标不是把所有历史对话原文塞回上下文，而是把对话压缩成
+可检索、可解释、可随时间改变召回难度的事件记忆。它把每次输入拆成一个或
+多个事件，每个事件包含：
+
+- `main_label`: 事件主标签，例如“申请消费贷款买电脑”；
+- `captured_at`: 记忆写入时的 UTC 时间；
+- `subtags`: 有角色和先后顺序的结构化子标签，例如 `when`、`who`、
+  `cause`、`action`、`state`、`from_where`、`to_where`、`with_who`；
+- `compressed_trace`: 第三层压缩痕迹，用更短文本保留事件整体语义；
+- `source`: 原文证据，只用于审计和 debug，默认不进入回答上下文。
+
+写入流程：
+
+```text
+raw input
+  -> LLM event extraction
+  -> MemoryEvent(main_label, captured_at, subtags, compressed_trace)
+  -> embed(main_label + subtag.embedding_text)
+  -> store events/subtags/embedding_items/source_records
+  -> update HNSW indexes if they already exist
+```
+
+注意 embedding 的对象是 `main_label` 和 `subtag.embedding_text`，不是完整原文。
+这样做的意义是把向量空间建在“结构化记忆线索”上，而不是把整段自然语言混成
+一个不可解释的向量。方向性也不交给 embedding 猜，而是由 role 保真：
+`from_where=北京` 和 `to_where=北京` 可以拥有相似语义向量，但检索和重排时
+它们是不同角色。
+
+查询流程：
+
+```text
+user question
+  -> LLM RetrievalPlan(key_question, retrieval_terms, target_slots, target_roles, recall_precision)
+  -> collection/filter prefilter
+  -> keyword match on main_label/subtags
+  -> role-aware HNSW or exact vector candidate recall
+  -> structured rerank(role, position, keyword, embedding, recall_difficulty)
+  -> LLM answer from structured evidence only
+```
+
+例如用户问“我之前为什么没申请贷款？”，LLM planner 会生成“贷款、申请贷款、
+消费贷款、offer 没确定”等检索词，并把 `target_slots` / `target_roles` 偏向 `cause/action/state`。
+系统先召回“申请消费贷款买电脑”事件，再利用子标签的 role 和 position 得到：
+`position=1` 的 `cause=offer 还没确定` 与 `action=暂时没申请贷款` 属于同一阶段，
+所以答案可以还原为“因为 offer 还没确定”。
+
+`target_slots` 用来处理同一个 role 多次出现的场景，例如同一事件里可能同时有
+`place@1=北京`、`place@2=上海`、`place@3=云杉酒店`。HNSW 仍按 role 召回
+候选，position 只在最终 rerank 和 evidence 分组里使用，避免把索引复杂化。
+
+召回分数由几部分共同决定：
+
+```text
+score =
+  keyword_score * 0.46
+  + embedding_score * 0.44
+  + exactness * 0.10
+  + slot_or_role_bonus
+```
+
+同时每个事件都有基于 wall-clock 的召回难度：
+
+```text
+age_days = now - captured_at
+stability = 1
+  + reinforcements * 0.32
+  + log1p(retrievals) * 0.22
+  + positive_feedback * 0.45
+  - negative_feedback * 0.12
+retention = exp(-forgetting_rate * age_days / stability)
+recall_difficulty = 1 - retention
+```
+
+这不是删除旧记忆，而是提高旧记忆的命中门槛。久远且没有被强化的事件需要
+更精确的检索词才能越过阈值；经常被召回或被正反馈强化的旧事件会保持较低
+召回难度。
+
+HNSW 的定位是候选召回层，不是最终判断层。SQLite v4 会持久化 global index 和
+role index，例如：
+
+```text
+global
+role:cause
+role:from_where
+role:to_where
+collection:finance:global
+collection:finance:role:cause
+```
+
+当新增记忆时，已有 HNSW 图会增量插入新的 `embedding_items`；删除事件时先写
+tombstone，让查询立即过滤掉旧节点；`compact` 会物理清理 deleted events 并重建
+干净的 ANN 图。JSON store 保持轻量，不保存大型 ANN 图。
+
+SQLite 数据库内核提供 collection、schema、filter DSL、soft delete、replace、
+compact 和 backup。filter DSL 是 AND-only，适合在进入 ANN 之前做稳定预过滤：
+
+```json
+{
+  "collections": ["finance"],
+  "roles": ["cause", "state"],
+  "where": {
+    "event.captured_at": {"gte": "2026-01-01T00:00:00+00:00"},
+    "metadata.user_id": {"eq": "u1"}
+  },
+  "recall": {"max_difficulty": 0.8}
+}
+```
+
+可视化也跟随这个模型：竖直轴表示 `captured_at`，新记忆在上、旧记忆在下；
+水平平面来自事件主标签和子标签 embedding 的二维投影；颜色和透明度表达
+`recall_difficulty`。因此视觉上的三维空间不再是假设性的“记忆位置”，而是
+“时间轴 + 语义平面”的可解释投影。
+
 HuMem Product 是一个可直接嵌入应用的本地分层记忆 RAG 模块。它从 HuMem 研究原型中拆出稳定的产品层，保留“上层稀疏锚点、下层稠密细节、关系牵引召回、读取强化、遗忘下沉”的记忆机制，同时把 embedding 做成可选增强。
 
 默认模式下，它不需要向量数据库、不需要模型 API、不需要 PyTorch；启用 OpenAI embedding 后，它会变成混合检索：`HuMem 分层记忆分数 + embedding 语义相似度`。
@@ -41,7 +222,7 @@ HuMem Product 是一个可直接嵌入应用的本地分层记忆 RAG 模块。�
 | 抽取式答案 | `answer()` 会基于最佳证据组装一个可直接返回或交给 LLM 的上下文答案 |
 | 读取强化 | 每次 retrieve/answer 会温和强化被命中的片段 |
 | 显式反馈 | `apply_feedback()` 可强化有用证据、抑制无用证据，并把反馈写入记忆状态 |
-| 遗忘衰减 | `decay()` 会让弱激活片段下沉，模拟长期记忆的可提取性变化 |
+| 遗忘衰减 | `decay()` 默认使用 cycle-based Ebbinghaus retention curve，让弱激活片段以非线性方式下沉 |
 | 记忆整合 | `consolidate()` 会把反复出现或高价值片段压缩成上层主题锚点，并保留证据关系 |
 | 本地持久化 | 支持 JSON store 和 SQLite store，保存完整记忆图、文档、chunk、embedding、布局、计数器和 RAG 策略配置 |
 
@@ -230,6 +411,32 @@ OpenAI 官方 Embeddings API 参考见：
 - https://platform.openai.com/docs/api-reference/embeddings/create
 - https://platform.openai.com/docs/guides/embeddings
 
+## Semantic Navigation Index
+
+HuMem now has an optional runtime semantic navigation layer for embedded
+chunks. This is where KANN/HNSW-like graph search belongs in the project: it
+helps find candidate `SourceChunk.embedding` neighbors, but it does not replace
+the HuMem memory graph and does not create durable `relations`.
+
+Configuration:
+
+```python
+rag = LayeredMemoryRAG(
+    embedding_provider="openai",
+    semantic_index="auto",  # "auto" | "exact" | "ann"
+)
+```
+
+- `exact` keeps the original full cosine scan and is the correctness baseline.
+- `auto` uses exact scan for small stores, then lazily builds the ANN graph once
+  enough embedded chunks exist.
+- `ann` forces the runtime navigation graph for experiments and benchmarks.
+
+The navigation graph is a rebuildable cache: JSON and SQLite stores keep chunk
+embeddings and the lightweight policy, but not the graph edges. Final ranking
+still flows through HuMem's existing memory weight, embedding weight,
+accessibility, relation bonus, and evidence merge.
+
 ## 命令行使用
 
 本地模式写入文档：
@@ -278,6 +485,18 @@ humem-product ask "robotics deployment plan" \
   --embedding-provider openai \
   --no-auto-embed
 ```
+
+选择语义导航策略：
+
+```bash
+humem-product ask "robotics deployment plan" \
+  --store memory-store.json \
+  --embedding-provider openai \
+  --semantic-index auto
+```
+
+`humem-product stats --store memory-store.json` 会输出当前 semantic index
+policy、embedded chunk 数量、索引是否已构建、最近一次检索策略和访问候选数。
 
 返回 JSON，适合服务端或脚本集成：
 
@@ -436,6 +655,19 @@ rag.decay(cycles=3, step=0.14)
 
 遗忘衰减会降低激活和强度，让弱记忆逐渐下沉。这个机制用于把“长期不用的细节”推向较深层，而不是让所有内容永远同等容易被召回。
 
+默认遗忘模型是 cycle-based Ebbinghaus 曲线：`forgettings` 作为经过的
+cycles，`step` 会缩放遗忘速率。`strength`、`retrievals`、正反馈、重复来源和
+关系支撑会提高 stability，让有价值的记忆忘得更慢；负反馈会提高遗忘速率；
+`consolidate()` 生成的上层 anchor 会轻微衰减但不会被普通遗忘快速推到底层。
+
+如需回到旧版线性衰减，可显式配置：
+
+```python
+rag = LayeredMemoryRAG(
+    dynamics={"forgetting_model": "linear"},
+)
+```
+
 ### `LayeredMemoryRAG.save/load`
 
 ```python
@@ -537,6 +769,7 @@ humem-product/
     embeddings.py      # optional OpenAI embedding provider
     memory_space.py    # layered memory graph runtime
     models.py          # dataclasses
+    navigation.py      # runtime semantic navigation index for embedded chunks
     parser.py          # lightweight parser and relation extraction
     consolidation.py   # deterministic anchor creation from recurring memories
     policy.py          # retrieval profiles and feedback defaults
@@ -571,7 +804,9 @@ python -m unittest discover -s tests
 - 旧 store 补齐缺失 embedding；
 - retrieval profile 持久化和 `archival` 只读检索；
 - positive / negative feedback 对记忆状态的影响；
+- Ebbinghaus / linear 两种遗忘模型，以及强化、负反馈、anchor 对 retention 的影响；
 - consolidation anchor 创建、刷新和支撑关系；
+- semantic navigation exact/auto/ann 策略、ANN lazy build、失效重建和 JSON/SQLite round-trip；
 - CLI ingest / ask / feedback / consolidate / layout 的 SQLite 工作流。
 
 ## 决策记录
@@ -600,10 +835,12 @@ reports/
 这组评测会检查：
 
 - 一次性数字记忆是否随 `decay()` 衰减并下沉；
+- Ebbinghaus retention 是否让强化记忆比普通记忆保持更高激活比例；
 - 重复查询是否强化目标记忆并提升原始召回分数；
 - sealed 底层细节是否能通过上层锚点关系被带出；
 - negative feedback 是否削弱并下沉被抑制的记忆；
 - consolidation 是否能创建上层 anchor 并连接多个支撑片段。
+- semantic navigation 是否在 exact 与 ANN top-k 之间保持可观测 overlap，并报告访问候选数和耗时。
 
 ### 3D 交互式记忆图
 

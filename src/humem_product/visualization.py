@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import mimetypes
 import webbrowser
 from http import HTTPStatus
@@ -10,12 +11,16 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+from .event_rag import ACTIVE_STATUS, EventRAG, MemoryEvent
 from .rag import LayeredMemoryRAG
-from .storage import load_rag
+from .storage import is_event_store, load_event_rag, load_rag
 
 
-def build_graph_data(rag: LayeredMemoryRAG) -> dict[str, Any]:
+def build_graph_data(rag: LayeredMemoryRAG | EventRAG) -> dict[str, Any]:
     """Convert a RAG store into the compact graph shape used by the viewer."""
+    if isinstance(rag, EventRAG):
+        return _build_event_graph_data(rag)
+
     nodes: list[dict[str, Any]] = []
     fragments = rag.space.fragments
 
@@ -123,10 +128,127 @@ def build_graph_data(rag: LayeredMemoryRAG) -> dict[str, Any]:
 
 
 def load_graph_data(store_path: str | Path) -> dict[str, Any]:
+    if is_event_store(store_path):
+        return build_graph_data(load_event_rag(store_path))
+
     rag = load_rag(store_path)
     if _needs_layout(rag):
         rag.layout_memory_space(use_embeddings=True, iterations=60)
     return build_graph_data(rag)
+
+
+def _build_event_graph_data(rag: EventRAG) -> dict[str, Any]:
+    rag.refresh_layout()
+    events = [event for event in rag.events.values() if event.status == ACTIVE_STATUS]
+    total_layers = max(4, min(8, len(events) + 2)) if events else 4
+    nodes: list[dict[str, Any]] = []
+    links: list[dict[str, Any]] = []
+    layer_histogram = [0] * total_layers
+
+    for event in events:
+        event_layer = _event_layer(event, total_layers)
+        layer_histogram[event_layer] += 1
+        access = 1.0 - event.recall_state.recall_difficulty
+        nodes.append(
+            {
+                "id": event.event_id,
+                "text": event.main_label,
+                "kind": "event",
+                "layer": event_layer,
+                "depth": event.recall_state.recall_difficulty,
+                "x": event.x,
+                "y": event.y,
+                "z": event.z,
+                "activation": access,
+                "strength": event.recall_state.stability,
+                "accessibility": access,
+                "retrievals": event.recall_state.retrievals,
+                "source": _event_source(event),
+                "collectionId": event.collection_id,
+                "status": event.status,
+                "chunkText": event.compressed_trace,
+                "isConsolidationAnchor": False,
+                "consolidation": None,
+                "layoutModel": "time-embedding-plane",
+                "hasEmbeddingLayout": True,
+                "embeddingScope": "event-subtags",
+                "semanticEdgeCount": len(event.subtags),
+                "relationEdgeCount": len(event.subtags),
+                "layoutUpdatedAt": None,
+            }
+        )
+        for index, subtag in enumerate(event.subtags):
+            angle = (index / max(len(event.subtags), 1)) * 6.283185307
+            radius = 0.08 + min(len(event.subtags), 8) * 0.006
+            node_id = subtag.subtag_id
+            nodes.append(
+                {
+                    "id": node_id,
+                    "text": f"{subtag.role}: {subtag.value}",
+                    "kind": subtag.role,
+                    "layer": event_layer,
+                    "depth": event.recall_state.recall_difficulty,
+                    "x": max(-1.0, min(event.x + math.cos(angle) * radius, 1.0)),
+                    "y": max(-1.0, min(event.y + math.sin(angle) * radius, 1.0)),
+                    "z": event.z,
+                    "activation": subtag.confidence,
+                    "strength": event.recall_state.stability * subtag.confidence,
+                    "accessibility": access,
+                    "retrievals": event.recall_state.retrievals,
+                    "source": _event_source(event),
+                    "collectionId": event.collection_id,
+                    "status": event.status,
+                    "chunkText": None,
+                    "isConsolidationAnchor": False,
+                    "consolidation": None,
+                    "layoutModel": "time-embedding-plane",
+                    "hasEmbeddingLayout": subtag.embedding is not None,
+                    "embeddingScope": "subtag",
+                    "semanticEdgeCount": len(event.subtags),
+                    "relationEdgeCount": len(event.subtags),
+                    "layoutUpdatedAt": None,
+                }
+            )
+            links.append(
+                {
+                    "id": f"{event.event_id}:{node_id}",
+                    "source": event.event_id,
+                    "target": node_id,
+                    "type": subtag.role,
+                    "weight": subtag.confidence,
+                    "crossLayer": False,
+                }
+            )
+
+    difficulties = [event.recall_state.recall_difficulty for event in events]
+    return {
+        "nodes": nodes,
+        "links": links,
+        "meta": {
+            "storeVersion": 4,
+            "memoryModel": "event-temporal",
+            "totalLayers": total_layers,
+            "layerHistogram": layer_histogram,
+            "documentCount": len({event.source.get("type") for event in events}),
+            "chunkCount": sum(len(event.subtags) for event in events),
+            "fragmentCount": len(nodes),
+            "eventCount": len(events),
+            "subtagCount": sum(len(event.subtags) for event in events),
+            "relationCount": len(links),
+            "layoutModel": "time-embedding-plane",
+            "hasEmbeddingLayout": True,
+            "embeddingScope": "event-subtags",
+            "semanticEdgeCount": len(links),
+            "relationEdgeCount": len(links),
+            "consolidationAnchorCount": 0,
+            "layoutUpdatedAt": None,
+            "retrievalProfile": "event-temporal",
+            "memoryWeight": 0.0,
+            "embeddingWeight": 1.0,
+            "meanRecallDifficulty": sum(difficulties) / len(difficulties) if difficulties else 0.0,
+            "timeAxis": "captured_at",
+        },
+    }
 
 
 def run_visualization_server(
@@ -170,6 +292,22 @@ def _best_source(value: Any) -> dict[str, str] | None:
                 "title": str(first.get("title", "")),
             }
     return None
+
+
+def _event_layer(event: MemoryEvent, total_layers: int) -> int:
+    if total_layers <= 1:
+        return 0
+    # z=1 is the newest/top memory plane, z=0 is the oldest/deepest plane.
+    return max(0, min(total_layers - 1, int(round((1.0 - event.z) * (total_layers - 1)))))
+
+
+def _event_source(event: MemoryEvent) -> dict[str, str]:
+    metadata = event.source.get("metadata", {}) if isinstance(event.source.get("metadata"), dict) else {}
+    return {
+        "documentId": str(metadata.get("document_id") or event.source.get("type") or "event"),
+        "chunkId": str(metadata.get("chunk_id") or event.event_id),
+        "title": str(metadata.get("title") or event.source.get("type") or "Event memory"),
+    }
 
 
 def _make_handler(store_path: Path) -> type[BaseHTTPRequestHandler]:

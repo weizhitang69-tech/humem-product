@@ -9,10 +9,16 @@ from typing import Any, Iterable
 from uuid import uuid4
 
 from .consolidation import MemoryConsolidationResult, build_consolidation_candidates
-from .embeddings import EmbeddingProvider, cosine_similarity, make_embedding_provider
+from .embeddings import EmbeddingProvider, make_embedding_provider
 from .memory_layout import LayoutResult, apply_memory_layout
 from .memory_space import MemoryDynamicsConfig, MemorySpace
 from .models import MemoryFragment, MemoryRelation, RetrievalHit
+from .navigation import (
+    NavigationHit,
+    SemanticNavigationConfig,
+    SemanticNavigationIndex,
+    exact_navigation_hits,
+)
 from .parser import normalize_text
 from .policy import RetrievalProfile, make_retrieval_profile
 
@@ -105,6 +111,12 @@ class LayeredMemoryRAG:
         retrieval_profile: str | RetrievalProfile | dict[str, Any] | None = None,
         memory_weight: float | None = None,
         embedding_weight: float | None = None,
+        semantic_index: str = "auto",
+        semantic_index_min_items: int = 256,
+        semantic_index_m: int = 8,
+        semantic_index_ef_construction: int = 64,
+        semantic_index_ef_search: int = 32,
+        semantic_index_seed: int = 13,
         dynamics: MemoryDynamicsConfig | dict[str, Any] | None = None,
     ) -> None:
         self.space = MemorySpace(
@@ -129,6 +141,19 @@ class LayeredMemoryRAG:
         )
         self.memory_weight = self.retrieval_profile.memory_weight
         self.embedding_weight = self.retrieval_profile.embedding_weight
+        self.semantic_navigation_config = SemanticNavigationConfig(
+            mode=semantic_index,
+            min_items=semantic_index_min_items,
+            m=semantic_index_m,
+            ef_construction=semantic_index_ef_construction,
+            ef_search=semantic_index_ef_search,
+            seed=semantic_index_seed,
+        )
+        self._semantic_navigation_index: SemanticNavigationIndex | None = None
+        self._semantic_navigation_signature: tuple[tuple[str, str | None, int], ...] | None = None
+        self._semantic_navigation_build_count = 0
+        self._last_semantic_navigation_strategy = "none"
+        self._last_semantic_navigation_visited = 0
 
     @property
     def total_layers(self) -> int:
@@ -183,6 +208,7 @@ class LayeredMemoryRAG:
         for _ in range(cool_down_cycles):
             self.space.forget()
 
+        self._invalidate_semantic_navigation_index()
         return doc_id
 
     def add_memory(
@@ -231,6 +257,8 @@ class LayeredMemoryRAG:
             "retrieval_profile": self.retrieval_profile.name,
             "reinforce_on_read": self.retrieval_profile.reinforce_on_read,
             "accessibility_weighted": True,
+            "forgetting_model": self.space.dynamics.forgetting_model,
+            "semantic_navigation": self.semantic_navigation_stats(),
         }
         return RAGAnswer(
             query=query,
@@ -326,6 +354,8 @@ class LayeredMemoryRAG:
             for chunk, embedding in zip(batch, embeddings):
                 chunk.embedding = embedding
                 chunk.embedding_model = self.embedding_provider.model
+        if missing:
+            self._invalidate_semantic_navigation_index()
         return len(missing)
 
     def consolidate(
@@ -459,6 +489,42 @@ class LayeredMemoryRAG:
                 histogram[fragment.layer] += 1
         return histogram
 
+    def set_semantic_index(
+        self,
+        mode: str,
+        *,
+        min_items: int | None = None,
+        m: int | None = None,
+        ef_construction: int | None = None,
+        ef_search: int | None = None,
+        seed: int | None = None,
+    ) -> None:
+        config = self.semantic_navigation_config
+        self.semantic_navigation_config = SemanticNavigationConfig(
+            mode=mode,
+            min_items=config.min_items if min_items is None else min_items,
+            m=config.m if m is None else m,
+            ef_construction=config.ef_construction if ef_construction is None else ef_construction,
+            ef_search=config.ef_search if ef_search is None else ef_search,
+            seed=config.seed if seed is None else seed,
+        )
+        self._invalidate_semantic_navigation_index()
+
+    def semantic_navigation_stats(self) -> dict[str, Any]:
+        embedded_chunks = sum(1 for chunk in self.chunks.values() if chunk.embedding)
+        index_items = self._semantic_navigation_index.item_count if self._semantic_navigation_index else 0
+        return {
+            "mode": self.semantic_navigation_config.mode,
+            "config": self.semantic_navigation_config.to_dict(),
+            "available": self.embedding_provider is not None and embedded_chunks > 0,
+            "embedded_chunks": embedded_chunks,
+            "index_built": self._semantic_navigation_index is not None,
+            "index_items": index_items,
+            "build_count": self._semantic_navigation_build_count,
+            "last_strategy": self._last_semantic_navigation_strategy,
+            "last_visited": self._last_semantic_navigation_visited,
+        }
+
     def snapshot(self) -> dict[str, Any]:
         return {
             "version": 3,
@@ -473,6 +539,7 @@ class LayeredMemoryRAG:
             "retrieval_profile": self.retrieval_profile.to_dict(),
             "memory_weight": self.memory_weight,
             "embedding_weight": self.embedding_weight,
+            "semantic_navigation": self.semantic_navigation_config.to_dict(),
         }
 
     def save(self, path: str | Path) -> None:
@@ -489,11 +556,20 @@ class LayeredMemoryRAG:
         space_payload = payload["memory_space"]
         config = space_payload["config"]
         rag_config = payload.get("rag_config", {})
+        semantic_navigation = rag_config.get("semantic_navigation", {})
+        if not isinstance(semantic_navigation, dict):
+            semantic_navigation = {}
         instance = cls(
             **config,
             retrieval_profile=rag_config.get("retrieval_profile"),
             memory_weight=rag_config.get("memory_weight"),
             embedding_weight=rag_config.get("embedding_weight"),
+            semantic_index=semantic_navigation.get("mode", "auto"),
+            semantic_index_min_items=semantic_navigation.get("min_items", 256),
+            semantic_index_m=semantic_navigation.get("m", 8),
+            semantic_index_ef_construction=semantic_navigation.get("ef_construction", 64),
+            semantic_index_ef_search=semantic_navigation.get("ef_search", 32),
+            semantic_index_seed=semantic_navigation.get("seed", 13),
         )
         instance.documents = {
             item["document_id"]: SourceDocument(**item)
@@ -504,6 +580,7 @@ class LayeredMemoryRAG:
             for item in payload.get("chunks", [])
         }
         instance._restore_space(space_payload)
+        instance._invalidate_semantic_navigation_index()
         return instance
 
     @classmethod
@@ -518,6 +595,7 @@ class LayeredMemoryRAG:
         retrieval_profile: str | RetrievalProfile | dict[str, Any] | None = None,
         memory_weight: float | None = None,
         embedding_weight: float | None = None,
+        semantic_index: str | None = None,
     ) -> "LayeredMemoryRAG":
         instance = cls.load(path)
         instance.embedding_provider = make_embedding_provider(
@@ -526,6 +604,7 @@ class LayeredMemoryRAG:
             api_key=embedding_api_key,
             dimensions=embedding_dimensions,
         )
+        instance._invalidate_semantic_navigation_index()
         if retrieval_profile is not None or memory_weight is not None or embedding_weight is not None:
             instance.retrieval_profile = make_retrieval_profile(
                 retrieval_profile or instance.retrieval_profile,
@@ -534,6 +613,8 @@ class LayeredMemoryRAG:
             )
             instance.memory_weight = instance.retrieval_profile.memory_weight
             instance.embedding_weight = instance.retrieval_profile.embedding_weight
+        if semantic_index is not None:
+            instance.set_semantic_index(semantic_index)
         return instance
 
     def _attach_source(
@@ -626,23 +707,23 @@ class LayeredMemoryRAG:
 
     def _semantic_evidence(self, query: str, *, limit: int) -> list[MemoryEvidence]:
         if self.embedding_provider is None:
+            self._last_semantic_navigation_strategy = "none"
+            self._last_semantic_navigation_visited = 0
             return []
         embedded_chunks = [chunk for chunk in self.chunks.values() if chunk.embedding]
         if not embedded_chunks:
+            self._last_semantic_navigation_strategy = "none"
+            self._last_semantic_navigation_visited = 0
             return []
 
         query_embedding = self.embedding_provider.embed_query(query)
-        scored = sorted(
-            (
-                (cosine_similarity(query_embedding, chunk.embedding or []), chunk)
-                for chunk in embedded_chunks
-            ),
-            key=lambda item: item[0],
-            reverse=True,
-        )
+        hits = self._semantic_chunk_hits(query_embedding, embedded_chunks, limit=limit)
 
         evidence: list[MemoryEvidence] = []
-        for similarity, chunk in scored[:limit]:
+        for hit in hits:
+            chunk = self.chunks.get(hit.chunk_id)
+            if chunk is None:
+                continue
             fragment = self._representative_fragment_for_chunk(chunk.chunk_id)
             if fragment is None:
                 continue
@@ -654,7 +735,7 @@ class LayeredMemoryRAG:
                     kind=fragment.kind,
                     layer=fragment.layer,
                     depth=fragment.depth,
-                    score=similarity,
+                    score=hit.score,
                     activation=fragment.activation,
                     strength=fragment.strength,
                     accessibility=self.space.accessibility_weight(fragment.depth),
@@ -663,14 +744,71 @@ class LayeredMemoryRAG:
                     chunk_id=chunk.chunk_id,
                     title=document.title if document else chunk.metadata.get("title"),
                     chunk_text=chunk.text,
-                    embedding_score=similarity,
-                    raw_embedding_score=similarity,
-                    final_score=similarity,
+                    embedding_score=hit.score,
+                    raw_embedding_score=hit.score,
+                    final_score=hit.score,
                     spatial_score=self.space.accessibility_weight(fragment.depth),
                     layout_score=self.space.accessibility_weight(fragment.depth),
                 )
             )
         return evidence
+
+    def _semantic_chunk_hits(
+        self,
+        query_embedding: list[float],
+        embedded_chunks: list[SourceChunk],
+        *,
+        limit: int,
+    ) -> list[NavigationHit]:
+        items = [
+            (chunk.chunk_id, chunk.embedding or [])
+            for chunk in embedded_chunks
+            if chunk.embedding
+        ]
+        if not items:
+            self._last_semantic_navigation_strategy = "none"
+            self._last_semantic_navigation_visited = 0
+            return []
+
+        config = self.semantic_navigation_config
+        if config.mode == "exact" or (config.mode == "auto" and len(items) < config.min_items):
+            self._last_semantic_navigation_strategy = "exact"
+            self._last_semantic_navigation_visited = len(items)
+            return exact_navigation_hits(items, query_embedding, limit=limit)
+
+        signature = self._semantic_navigation_items_signature(embedded_chunks)
+        if self._semantic_navigation_index is None or self._semantic_navigation_signature != signature:
+            index = SemanticNavigationIndex(config)
+            index.build(items)
+            self._semantic_navigation_index = index
+            self._semantic_navigation_signature = signature
+            self._semantic_navigation_build_count += 1
+
+        hits = self._semantic_navigation_index.search(query_embedding, limit=limit)
+        self._last_semantic_navigation_visited = self._semantic_navigation_index.last_visited
+        if hits:
+            self._last_semantic_navigation_strategy = "ann"
+            return hits
+
+        self._last_semantic_navigation_strategy = "ann_fallback_exact"
+        self._last_semantic_navigation_visited = len(items)
+        return exact_navigation_hits(items, query_embedding, limit=limit)
+
+    def _semantic_navigation_items_signature(
+        self,
+        embedded_chunks: Iterable[SourceChunk],
+    ) -> tuple[tuple[str, str | None, int], ...]:
+        return tuple(
+            (chunk.chunk_id, chunk.embedding_model, len(chunk.embedding or []))
+            for chunk in embedded_chunks
+            if chunk.embedding
+        )
+
+    def _invalidate_semantic_navigation_index(self) -> None:
+        self._semantic_navigation_index = None
+        self._semantic_navigation_signature = None
+        self._last_semantic_navigation_strategy = "none"
+        self._last_semantic_navigation_visited = 0
 
     def _representative_fragment_for_chunk(self, chunk_id: str) -> MemoryFragment | None:
         candidates: list[MemoryFragment] = []

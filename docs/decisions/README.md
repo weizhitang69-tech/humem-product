@@ -13,3 +13,8 @@ research surface, runtime behavior, persistence format, or developer workflow.
 | 0006 | Add feedback probe to local evaluation reports | Accepted |
 | 0007 | Deterministic memory consolidation cycle | Accepted |
 | 0008 | Biomimetic memory-space viewer | Accepted |
+| 0009 | Runtime semantic navigation index | Accepted |
+| 0010 | Ebbinghaus-style forgetting dynamics | Accepted |
+| 0011 | Event-centric temporal memory rewrite | Accepted |
+| 0012 | Persisted EventRAG HNSW index | Accepted |
+| 0013 | EventRAG SQLite database core | Accepted |

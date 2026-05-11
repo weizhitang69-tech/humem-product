@@ -1,52 +1,52 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="520" viewBox="0 0 980 520">
   <rect width="100%" height="100%" fill="#F8FAFC"/>
-  <text x="38" y="42" font-family="Arial" font-size="26" font-weight="700" fill="#0F172A">Forgetting Curve: one-time code 45123789</text>
-  <text x="38" y="68" font-family="Arial" font-size="14" fill="#475569">Activation and strength decay over cycles; layer bars grow as the fragment sinks deeper.</text>
+  <text x="38" y="42" font-family="Arial" font-size="26" font-weight="700" fill="#0F172A">Ebbinghaus Forgetting Curve: one-time code 45123789</text>
+  <text x="38" y="68" font-family="Arial" font-size="14" fill="#475569">Retention curves drive activation decay; HuMem state still decides layer movement.</text>
   <line x1="70" y1="450" x2="910" y2="450" stroke="#334155" stroke-width="1.5"/>
   <line x1="70" y1="70" x2="70" y2="450" stroke="#334155" stroke-width="1.5"/>
-  <rect x="58.0" y="378.0" width="24" height="72.0" fill="#CBD5E1" opacity="0.9"/><rect x="128.0" y="378.0" width="24" height="72.0" fill="#CBD5E1" opacity="0.9"/><rect x="198.0" y="378.0" width="24" height="72.0" fill="#CBD5E1" opacity="0.9"/><rect x="268.0" y="378.0" width="24" height="72.0" fill="#CBD5E1" opacity="0.9"/><rect x="338.0" y="360.0" width="24" height="90.0" fill="#CBD5E1" opacity="0.9"/><rect x="408.0" y="342.0" width="24" height="108.0" fill="#CBD5E1" opacity="0.9"/><rect x="478.0" y="324.0" width="24" height="126.0" fill="#CBD5E1" opacity="0.9"/><rect x="548.0" y="306.0" width="24" height="144.0" fill="#CBD5E1" opacity="0.9"/><rect x="618.0" y="306.0" width="24" height="144.0" fill="#CBD5E1" opacity="0.9"/><rect x="688.0" y="306.0" width="24" height="144.0" fill="#CBD5E1" opacity="0.9"/><rect x="758.0" y="306.0" width="24" height="144.0" fill="#CBD5E1" opacity="0.9"/><rect x="828.0" y="306.0" width="24" height="144.0" fill="#CBD5E1" opacity="0.9"/><rect x="898.0" y="306.0" width="24" height="144.0" fill="#CBD5E1" opacity="0.9"/>
-  <polyline points="70.0,153.6 140.0,206.8 210.0,260.0 280.0,313.2 350.0,366.4 420.0,419.6 490.0,450.0 560.0,450.0 630.0,450.0 700.0,450.0 770.0,450.0 840.0,450.0 910.0,450.0" fill="none" stroke="#2563EB" stroke-width="3"/>
+  <rect x="58.0" y="378.0" width="24" height="72.0" fill="#CBD5E1" opacity="0.9"/><rect x="128.0" y="378.0" width="24" height="72.0" fill="#CBD5E1" opacity="0.9"/><rect x="198.0" y="378.0" width="24" height="72.0" fill="#CBD5E1" opacity="0.9"/><rect x="268.0" y="378.0" width="24" height="72.0" fill="#CBD5E1" opacity="0.9"/><rect x="338.0" y="378.0" width="24" height="72.0" fill="#CBD5E1" opacity="0.9"/><rect x="408.0" y="378.0" width="24" height="72.0" fill="#CBD5E1" opacity="0.9"/><rect x="478.0" y="360.0" width="24" height="90.0" fill="#CBD5E1" opacity="0.9"/><rect x="548.0" y="342.0" width="24" height="108.0" fill="#CBD5E1" opacity="0.9"/><rect x="618.0" y="324.0" width="24" height="126.0" fill="#CBD5E1" opacity="0.9"/><rect x="688.0" y="306.0" width="24" height="144.0" fill="#CBD5E1" opacity="0.9"/><rect x="758.0" y="306.0" width="24" height="144.0" fill="#CBD5E1" opacity="0.9"/><rect x="828.0" y="306.0" width="24" height="144.0" fill="#CBD5E1" opacity="0.9"/><rect x="898.0" y="306.0" width="24" height="144.0" fill="#CBD5E1" opacity="0.9"/>
+  <polyline points="70.0,153.6 140.0,215.2 210.0,264.6 280.0,303.9 350.0,335.2 420.0,360.0 490.0,379.6 560.0,395.1 630.0,407.2 700.0,416.7 770.0,424.2 840.0,430.0 910.0,433.2" fill="none" stroke="#2563EB" stroke-width="3"/>
 <circle cx="70.0" cy="153.6" r="4" fill="#2563EB"/>
-<circle cx="140.0" cy="206.8" r="4" fill="#2563EB"/>
-<circle cx="210.0" cy="260.0" r="4" fill="#2563EB"/>
-<circle cx="280.0" cy="313.2" r="4" fill="#2563EB"/>
-<circle cx="350.0" cy="366.4" r="4" fill="#2563EB"/>
-<circle cx="420.0" cy="419.6" r="4" fill="#2563EB"/>
-<circle cx="490.0" cy="450.0" r="4" fill="#2563EB"/>
-<circle cx="560.0" cy="450.0" r="4" fill="#2563EB"/>
-<circle cx="630.0" cy="450.0" r="4" fill="#2563EB"/>
-<circle cx="700.0" cy="450.0" r="4" fill="#2563EB"/>
-<circle cx="770.0" cy="450.0" r="4" fill="#2563EB"/>
-<circle cx="840.0" cy="450.0" r="4" fill="#2563EB"/>
-<circle cx="910.0" cy="450.0" r="4" fill="#2563EB"/>
-  <polyline points="70.0,153.6 140.0,188.2 210.0,222.8 280.0,257.3 350.0,291.9 420.0,326.5 490.0,361.1 560.0,395.7 630.0,430.2 700.0,450.0 770.0,450.0 840.0,450.0 910.0,450.0" fill="none" stroke="#0F766E" stroke-width="3"/>
+<circle cx="140.0" cy="215.2" r="4" fill="#2563EB"/>
+<circle cx="210.0" cy="264.6" r="4" fill="#2563EB"/>
+<circle cx="280.0" cy="303.9" r="4" fill="#2563EB"/>
+<circle cx="350.0" cy="335.2" r="4" fill="#2563EB"/>
+<circle cx="420.0" cy="360.0" r="4" fill="#2563EB"/>
+<circle cx="490.0" cy="379.6" r="4" fill="#2563EB"/>
+<circle cx="560.0" cy="395.1" r="4" fill="#2563EB"/>
+<circle cx="630.0" cy="407.2" r="4" fill="#2563EB"/>
+<circle cx="700.0" cy="416.7" r="4" fill="#2563EB"/>
+<circle cx="770.0" cy="424.2" r="4" fill="#2563EB"/>
+<circle cx="840.0" cy="430.0" r="4" fill="#2563EB"/>
+<circle cx="910.0" cy="433.2" r="4" fill="#2563EB"/>
+  <polyline points="70.0,153.6 140.0,177.0 210.0,198.8 280.0,219.1 350.0,237.9 420.0,255.3 490.0,271.4 560.0,286.3 630.0,300.1 700.0,312.8 770.0,324.4 840.0,335.2 910.0,342.1" fill="none" stroke="#0F766E" stroke-width="3"/>
 <circle cx="70.0" cy="153.6" r="4" fill="#0F766E"/>
-<circle cx="140.0" cy="188.2" r="4" fill="#0F766E"/>
-<circle cx="210.0" cy="222.8" r="4" fill="#0F766E"/>
-<circle cx="280.0" cy="257.3" r="4" fill="#0F766E"/>
-<circle cx="350.0" cy="291.9" r="4" fill="#0F766E"/>
-<circle cx="420.0" cy="326.5" r="4" fill="#0F766E"/>
-<circle cx="490.0" cy="361.1" r="4" fill="#0F766E"/>
-<circle cx="560.0" cy="395.7" r="4" fill="#0F766E"/>
-<circle cx="630.0" cy="430.2" r="4" fill="#0F766E"/>
-<circle cx="700.0" cy="450.0" r="4" fill="#0F766E"/>
-<circle cx="770.0" cy="450.0" r="4" fill="#0F766E"/>
-<circle cx="840.0" cy="450.0" r="4" fill="#0F766E"/>
-<circle cx="910.0" cy="450.0" r="4" fill="#0F766E"/>
-  <polyline points="70.0,178.7 140.0,182.9 210.0,187.2 280.0,191.4 350.0,195.7 420.0,200.0 490.0,204.2 560.0,208.5 630.0,212.7 700.0,217.0 770.0,221.2 840.0,225.5 910.0,229.8" fill="none" stroke="#F59E0B" stroke-width="3"/>
+<circle cx="140.0" cy="177.0" r="4" fill="#0F766E"/>
+<circle cx="210.0" cy="198.8" r="4" fill="#0F766E"/>
+<circle cx="280.0" cy="219.1" r="4" fill="#0F766E"/>
+<circle cx="350.0" cy="237.9" r="4" fill="#0F766E"/>
+<circle cx="420.0" cy="255.3" r="4" fill="#0F766E"/>
+<circle cx="490.0" cy="271.4" r="4" fill="#0F766E"/>
+<circle cx="560.0" cy="286.3" r="4" fill="#0F766E"/>
+<circle cx="630.0" cy="300.1" r="4" fill="#0F766E"/>
+<circle cx="700.0" cy="312.8" r="4" fill="#0F766E"/>
+<circle cx="770.0" cy="324.4" r="4" fill="#0F766E"/>
+<circle cx="840.0" cy="335.2" r="4" fill="#0F766E"/>
+<circle cx="910.0" cy="342.1" r="4" fill="#0F766E"/>
+  <polyline points="70.0,178.7 140.0,191.1 210.0,203.1 280.0,214.6 350.0,225.7 420.0,236.4 490.0,246.6 560.0,256.4 630.0,265.8 700.0,274.9 770.0,283.5 840.0,291.7 910.0,297.2" fill="none" stroke="#F59E0B" stroke-width="3"/>
 <circle cx="70.0" cy="178.7" r="4" fill="#F59E0B"/>
-<circle cx="140.0" cy="182.9" r="4" fill="#F59E0B"/>
-<circle cx="210.0" cy="187.2" r="4" fill="#F59E0B"/>
-<circle cx="280.0" cy="191.4" r="4" fill="#F59E0B"/>
-<circle cx="350.0" cy="195.7" r="4" fill="#F59E0B"/>
-<circle cx="420.0" cy="200.0" r="4" fill="#F59E0B"/>
-<circle cx="490.0" cy="204.2" r="4" fill="#F59E0B"/>
-<circle cx="560.0" cy="208.5" r="4" fill="#F59E0B"/>
-<circle cx="630.0" cy="212.7" r="4" fill="#F59E0B"/>
-<circle cx="700.0" cy="217.0" r="4" fill="#F59E0B"/>
-<circle cx="770.0" cy="221.2" r="4" fill="#F59E0B"/>
-<circle cx="840.0" cy="225.5" r="4" fill="#F59E0B"/>
-<circle cx="910.0" cy="229.8" r="4" fill="#F59E0B"/>
+<circle cx="140.0" cy="191.1" r="4" fill="#F59E0B"/>
+<circle cx="210.0" cy="203.1" r="4" fill="#F59E0B"/>
+<circle cx="280.0" cy="214.6" r="4" fill="#F59E0B"/>
+<circle cx="350.0" cy="225.7" r="4" fill="#F59E0B"/>
+<circle cx="420.0" cy="236.4" r="4" fill="#F59E0B"/>
+<circle cx="490.0" cy="246.6" r="4" fill="#F59E0B"/>
+<circle cx="560.0" cy="256.4" r="4" fill="#F59E0B"/>
+<circle cx="630.0" cy="265.8" r="4" fill="#F59E0B"/>
+<circle cx="700.0" cy="274.9" r="4" fill="#F59E0B"/>
+<circle cx="770.0" cy="283.5" r="4" fill="#F59E0B"/>
+<circle cx="840.0" cy="291.7" r="4" fill="#F59E0B"/>
+<circle cx="910.0" cy="297.2" r="4" fill="#F59E0B"/>
   <text x="70" y="492" font-family="Arial" font-size="13" fill="#475569">forget cycles</text>
   <text x="24" y="82" font-family="Arial" font-size="13" fill="#475569">value</text>
   <rect x="650" y="26" width="250" height="86" rx="10" fill="#FFFFFF" stroke="#CBD5E1"/>

@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from humem_product import LayeredMemoryRAG  # noqa: E402
 from humem_product.memory_layout import apply_memory_layout  # noqa: E402
+from humem_product.navigation import exact_navigation_hits  # noqa: E402
 from humem_product.storage import load_rag, migrate_json_to_sqlite, save_rag  # noqa: E402
 from humem_product.visualization import build_graph_data  # noqa: E402
 
@@ -202,6 +203,140 @@ class LayeredMemoryRAGTests(unittest.TestCase):
         stored_chunk = next(iter(rag.chunks.values()))
         self.assertEqual(stored_chunk.embedding_model, "fake-embedding")
 
+    def test_semantic_index_exact_matches_cosine_scan(self) -> None:
+        rag = LayeredMemoryRAG(embedding_provider=FakeEmbeddingProvider(), semantic_index="exact")
+        rag.add_document(
+            "Alice keeps the robot launch checklist in the blue notebook. "
+            "Maya stores the incident response runbook in vault seven.",
+            document_id="mixed",
+            title="Mixed",
+            cool_down_cycles=0,
+        )
+
+        query_embedding = rag.embedding_provider.embed_query("robotics deployment plan")
+        items = [
+            (chunk.chunk_id, chunk.embedding or [])
+            for chunk in rag.chunks.values()
+            if chunk.embedding
+        ]
+        expected_chunk_ids = [
+            hit.chunk_id for hit in exact_navigation_hits(items, query_embedding, limit=5)
+        ]
+        evidence = rag._semantic_evidence("robotics deployment plan", limit=5)
+
+        self.assertEqual([item.chunk_id for item in evidence], expected_chunk_ids)
+        self.assertEqual(rag.semantic_navigation_stats()["last_strategy"], "exact")
+        self.assertFalse(rag.semantic_navigation_stats()["index_built"])
+
+    def test_semantic_index_auto_uses_exact_for_small_store(self) -> None:
+        rag = LayeredMemoryRAG(
+            embedding_provider=FakeEmbeddingProvider(),
+            semantic_index="auto",
+            semantic_index_min_items=99,
+        )
+        rag.add_document(
+            "Alice keeps the robot launch checklist in the blue notebook.",
+            document_id="launch",
+            title="Launch Notes",
+            cool_down_cycles=0,
+        )
+
+        answer = rag.answer("robotics deployment plan", limit=3)
+        navigation = answer.diagnostics["semantic_navigation"]
+
+        self.assertEqual(navigation["last_strategy"], "exact")
+        self.assertFalse(navigation["index_built"])
+        self.assertEqual(navigation["embedded_chunks"], 1)
+
+    def test_semantic_index_ann_recalls_clustered_chunk(self) -> None:
+        rag = LayeredMemoryRAG(
+            embedding_provider=FakeEmbeddingProvider(),
+            semantic_index="ann",
+            semantic_index_min_items=1,
+            semantic_index_m=4,
+            semantic_index_ef_construction=16,
+            semantic_index_ef_search=12,
+        )
+        rag.add_document(
+            "Alice keeps the robot launch checklist in the blue notebook.",
+            document_id="launch",
+            title="Launch Notes",
+            cool_down_cycles=0,
+        )
+        for index in range(10):
+            rag.add_document(
+                f"Maya stores incident response runbook copy {index} in vault seven.",
+                document_id=f"ops-{index}",
+                title=f"Ops {index}",
+                cool_down_cycles=0,
+            )
+
+        answer = rag.answer("Where is the robotics deployment plan stored?", limit=5)
+        navigation = answer.diagnostics["semantic_navigation"]
+
+        self.assertEqual(navigation["last_strategy"], "ann")
+        self.assertTrue(navigation["index_built"])
+        self.assertGreaterEqual(navigation["last_visited"], 1)
+        self.assertIn("blue notebook", answer.answer.lower())
+        self.assertTrue(any(item.chunk_id == "launch:0" for item in answer.evidence))
+
+    def test_semantic_index_invalidates_after_document_change(self) -> None:
+        rag = LayeredMemoryRAG(
+            embedding_provider=FakeEmbeddingProvider(),
+            semantic_index="ann",
+            semantic_index_min_items=1,
+        )
+        rag.add_document(
+            "Alice keeps the robot launch checklist in the blue notebook.",
+            document_id="launch",
+            title="Launch Notes",
+            cool_down_cycles=0,
+        )
+        first = rag.answer("robotics deployment plan", limit=3)
+        first_build_count = first.diagnostics["semantic_navigation"]["build_count"]
+
+        rag.add_document(
+            "Maya stores the incident response runbook in vault seven.",
+            document_id="ops",
+            title="Ops Runbook",
+            cool_down_cycles=0,
+        )
+        after_add = rag.semantic_navigation_stats()
+        second = rag.answer("incident response runbook", limit=3)
+
+        self.assertEqual(after_add["last_strategy"], "none")
+        self.assertFalse(after_add["index_built"])
+        self.assertGreater(second.diagnostics["semantic_navigation"]["build_count"], first_build_count)
+        self.assertEqual(second.diagnostics["semantic_navigation"]["last_strategy"], "ann")
+
+    def test_semantic_index_rebuilds_after_json_round_trip(self) -> None:
+        rag = LayeredMemoryRAG(
+            embedding_provider=FakeEmbeddingProvider(),
+            semantic_index="ann",
+            semantic_index_min_items=1,
+        )
+        rag.add_document(
+            "Alice keeps the robot launch checklist in the blue notebook.",
+            document_id="launch",
+            title="Launch Notes",
+            cool_down_cycles=0,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "memory.json"
+            rag.save(path)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertIn("semantic_navigation", payload["rag_config"])
+            restored = LayeredMemoryRAG.load_with_embeddings(
+                path,
+                embedding_provider=FakeEmbeddingProvider(),
+                semantic_index="ann",
+            )
+            answer = restored.answer("robotics deployment plan", limit=3)
+
+        self.assertEqual(answer.diagnostics["semantic_navigation"]["last_strategy"], "ann")
+        self.assertEqual(answer.diagnostics["semantic_navigation"]["build_count"], 1)
+
     def test_load_with_embeddings_adds_provider_for_existing_store(self) -> None:
         rag = LayeredMemoryRAG()
         rag.add_document(
@@ -334,6 +469,141 @@ class LayeredMemoryRAGTests(unittest.TestCase):
         self.assertLessEqual(reinforced_depth, initial_depth)
         self.assertGreater(fragment.depth, reinforced_depth)
 
+    def test_linear_forgetting_model_preserves_legacy_decay(self) -> None:
+        rag = LayeredMemoryRAG(total_layers=5, dynamics={"forgetting_model": "linear"})
+        fragment_id = rag.add_memory("linearmemory", source="test")[0]
+        fragment = rag.space.fragments[fragment_id]
+        fragment.layer = 2
+        fragment.activation = 0.8
+        fragment.strength = 0.8
+        fragment.ease = 0.7
+
+        rag.decay(step=0.14, cycles=1)
+
+        self.assertAlmostEqual(fragment.activation, 0.66)
+        self.assertAlmostEqual(fragment.strength, 0.709)
+        self.assertAlmostEqual(fragment.ease, 0.6888)
+        self.assertEqual(fragment.layer, 2)
+        self.assertEqual(rag.space.dynamics.forgetting_model, "linear")
+
+    def test_ebbinghaus_forgetting_sinks_one_time_detail(self) -> None:
+        rag = LayeredMemoryRAG(total_layers=5)
+        rag.add_document(
+            "The temporary code 45123789 appeared once.",
+            document_id="forgetting",
+            title="Forgetting",
+            cool_down_cycles=0,
+        )
+        fragment = next(
+            item
+            for item in rag.space.fragments.values()
+            if item.normalized_text == "45123789"
+        )
+        start_layer = fragment.layer
+        start_activation = fragment.activation
+
+        rag.decay(step=0.14, cycles=7)
+
+        self.assertEqual(rag.space.dynamics.forgetting_model, "ebbinghaus")
+        self.assertLess(fragment.activation, start_activation)
+        self.assertLess(rag.space.retention_for_fragment(fragment), 0.24)
+        self.assertGreater(fragment.layer, start_layer)
+
+    def test_reinforced_memory_retains_more_than_plain_memory(self) -> None:
+        rag = LayeredMemoryRAG(total_layers=5)
+        reinforced_id = rag.add_memory("reinforcedmemory", source="test")[0]
+        plain_id = rag.add_memory("plainmemory", source="test")[0]
+        for fragment_id in (reinforced_id, plain_id):
+            fragment = rag.space.fragments[fragment_id]
+            fragment.layer = 2
+            fragment.activation = 0.8
+            fragment.strength = 0.8
+            fragment.ease = 0.7
+            fragment.retrievals = 0
+            fragment.reinforcements = 1
+            fragment.forgettings = 0
+            rag.space.refresh_fragment_state(fragment)
+
+        rag.reinforce(reinforced_id, amount=0.5)
+        reinforced_start = rag.space.fragments[reinforced_id].activation
+        plain_start = rag.space.fragments[plain_id].activation
+        rag.decay(step=0.14, cycles=6)
+        reinforced = rag.space.fragments[reinforced_id]
+        plain = rag.space.fragments[plain_id]
+
+        self.assertGreater(reinforced.activation / reinforced_start, plain.activation / plain_start)
+        self.assertLessEqual(reinforced.layer, plain.layer)
+
+    def test_negative_feedback_accelerates_forgetting(self) -> None:
+        rag = LayeredMemoryRAG(total_layers=5)
+        suppressed_id = rag.add_memory("suppressedmemory", source="test")[0]
+        plain_id = rag.add_memory("neutralmemory", source="test")[0]
+        for fragment_id in (suppressed_id, plain_id):
+            fragment = rag.space.fragments[fragment_id]
+            fragment.layer = 2
+            fragment.activation = 0.8
+            fragment.strength = 0.8
+            fragment.ease = 0.7
+            fragment.forgettings = 0
+            rag.space.refresh_fragment_state(fragment)
+
+        rag.apply_feedback(
+            negative_fragment_ids=[suppressed_id],
+            reason="unit_test",
+            negative_amount=0.1,
+        )
+        rag.decay(step=0.14, cycles=5)
+        suppressed = rag.space.fragments[suppressed_id]
+        plain = rag.space.fragments[plain_id]
+
+        self.assertLess(suppressed.activation, plain.activation)
+        self.assertLess(rag.space.retention_for_fragment(suppressed), rag.space.retention_for_fragment(plain))
+        self.assertGreaterEqual(suppressed.layer, plain.layer)
+
+    def test_consolidation_anchor_resists_ordinary_forgetting(self) -> None:
+        rag = LayeredMemoryRAG(total_layers=5)
+        rag.add_document(
+            "Alice keeps the robot launch checklist in the blue notebook. "
+            "The robot launch checklist helps deployment readiness. "
+            "Alice reviews deployment readiness before launch.",
+            document_id="launch",
+            title="Launch Notes",
+            cool_down_cycles=0,
+        )
+        result = rag.consolidate(min_support=3, keywords_per_anchor=4)
+        anchor = rag.space.fragments[result.created_anchor_ids[0]]
+
+        rag.decay(step=0.14, cycles=10)
+
+        self.assertEqual(anchor.layer, 0)
+        self.assertGreater(anchor.activation, 0.5)
+        self.assertGreater(rag.space.retention_for_fragment(anchor), 0.5)
+
+    def test_dynamics_round_trip_preserves_forgetting_model(self) -> None:
+        rag = LayeredMemoryRAG(
+            dynamics={
+                "forgetting_model": "linear",
+                "base_forgetting_rate": 0.22,
+            }
+        )
+        rag.add_document(
+            "Maya stores the incident response runbook in vault seven.",
+            document_id="ops",
+            title="Ops Runbook",
+            cool_down_cycles=0,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "memory.json"
+            rag.save(path)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            restored = LayeredMemoryRAG.load(path)
+
+        dynamics = payload["memory_space"]["config"]["dynamics"]
+        self.assertEqual(dynamics["forgetting_model"], "linear")
+        self.assertEqual(restored.space.dynamics.forgetting_model, "linear")
+        self.assertEqual(restored.space.dynamics.base_forgetting_rate, 0.22)
+
     def test_embedding_layout_places_similar_memories_closer(self) -> None:
         rag = LayeredMemoryRAG(total_layers=5)
         alpha_ids = rag.add_memory("alpha project launch checklist", source="demo")
@@ -463,7 +733,12 @@ class MemoryVisualizationTests(unittest.TestCase):
 
 class SQLiteStorageTests(unittest.TestCase):
     def test_sqlite_round_trip_preserves_memory_graph(self) -> None:
-        rag = LayeredMemoryRAG(embedding_provider=FakeEmbeddingProvider(), retrieval_profile="conservative")
+        rag = LayeredMemoryRAG(
+            embedding_provider=FakeEmbeddingProvider(),
+            retrieval_profile="conservative",
+            semantic_index="ann",
+            semantic_index_min_items=1,
+        )
         rag.add_document(
             "Alice keeps the robot launch checklist in the blue notebook.",
             document_id="launch",
@@ -483,9 +758,14 @@ class SQLiteStorageTests(unittest.TestCase):
         self.assertEqual(len(restored.space.relations), len(rag.space.relations))
         self.assertEqual(restored.layer_histogram(), rag.layer_histogram())
         self.assertEqual(restored.retrieval_profile.name, "conservative")
+        self.assertEqual(restored.semantic_navigation_config.mode, "ann")
+        self.assertEqual(restored.semantic_navigation_config.min_items, 1)
         self.assertTrue(any(chunk.embedding for chunk in restored.chunks.values()))
         self.assertTrue(all(fragment.depth >= 0 for fragment in restored.space.fragments.values()))
         self.assertTrue(any("layout_model" in fragment.metadata for fragment in restored.space.fragments.values()))
+        restored.embedding_provider = FakeEmbeddingProvider()
+        answer = restored.answer("robotics deployment plan", limit=3)
+        self.assertEqual(answer.diagnostics["semantic_navigation"]["last_strategy"], "ann")
 
     def test_json_to_sqlite_migration_preserves_answer_behavior(self) -> None:
         rag = LayeredMemoryRAG()
@@ -508,6 +788,30 @@ class SQLiteStorageTests(unittest.TestCase):
         self.assertGreater(len(answer.evidence), 0)
         self.assertIn("runbook", answer.answer.lower())
 
+    def test_sqlite_round_trip_preserves_dynamics_config(self) -> None:
+        rag = LayeredMemoryRAG(
+            dynamics={
+                "forgetting_model": "linear",
+                "retention_floor": 0.07,
+                "base_forgetting_rate": 0.22,
+            }
+        )
+        rag.add_document(
+            "Maya stores the incident response runbook in vault seven.",
+            document_id="ops",
+            title="Ops Runbook",
+            cool_down_cycles=0,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "memory.db"
+            save_rag(db_path, rag, event_type="test_save")
+            restored = load_rag(db_path)
+
+        self.assertEqual(restored.space.dynamics.forgetting_model, "linear")
+        self.assertEqual(restored.space.dynamics.retention_floor, 0.07)
+        self.assertEqual(restored.space.dynamics.base_forgetting_rate, 0.22)
+
     def test_cli_commands_work_with_sqlite_store(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             text_path = Path(temp_dir) / "story.txt"
@@ -520,8 +824,26 @@ class SQLiteStorageTests(unittest.TestCase):
 
             ingest = _run_cli("ingest", str(text_path), "--store", str(db_path), "--title", "Story")
             stats = _run_cli("stats", "--store", str(db_path))
-            ask = _run_cli("ask", "robot launch checklist", "--store", str(db_path), "--json")
+            ask = _run_cli(
+                "ask",
+                "robot launch checklist",
+                "--store",
+                str(db_path),
+                "--semantic-index",
+                "exact",
+                "--json",
+            )
             ask_payload = json.loads(ask.stdout)
+            ask_ann = _run_cli(
+                "ask",
+                "robot launch checklist",
+                "--store",
+                str(db_path),
+                "--semantic-index",
+                "ann",
+                "--json",
+            )
+            ask_ann_payload = json.loads(ask_ann.stdout)
             feedback = _run_cli(
                 "feedback",
                 "--store",
@@ -551,8 +873,11 @@ class SQLiteStorageTests(unittest.TestCase):
 
         self.assertIn("ingested document", ingest.stdout)
         self.assertGreater(stats_payload["fragments"], 0)
+        self.assertIn("semantic_navigation", stats_payload)
         self.assertGreater(len(ask_payload["evidence"]), 0)
         self.assertIn("raw_keyword_score", ask_payload["evidence"][0])
+        self.assertEqual(ask_payload["diagnostics"]["semantic_navigation"]["mode"], "exact")
+        self.assertEqual(ask_ann_payload["diagnostics"]["semantic_navigation"]["mode"], "ann")
         self.assertEqual(len(feedback_payload["negative"]), 1)
         self.assertEqual(feedback_payload["diagnostics"]["retrieval_profile"], "balanced")
         self.assertEqual(len(consolidate_payload["created_anchor_ids"]), 1)

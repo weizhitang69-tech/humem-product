@@ -1,0 +1,593 @@
+{
+  "sample_count": 2000,
+  "seed": 20260511,
+  "modes": {
+    "full_role_position": {
+      "total": 2000,
+      "correct": 2000,
+      "accuracy": 1.0,
+      "errors": {}
+    },
+    "no_position": {
+      "total": 2000,
+      "correct": 1836,
+      "accuracy": 0.918,
+      "errors": {
+        "missing_position": 164
+      }
+    },
+    "value_bag": {
+      "total": 2000,
+      "correct": 1279,
+      "accuracy": 0.6395,
+      "errors": {
+        "missing_position": 164,
+        "wrong_role": 557
+      }
+    },
+    "noisy_full_role_position": {
+      "total": 2000,
+      "correct": 1709,
+      "accuracy": 0.8545,
+      "errors": {
+        "missing_target": 137,
+        "wrong_position": 24,
+        "wrong_value": 130
+      }
+    }
+  },
+  "accuracy_by_event_type": {
+    "full_role_position|health": {
+      "total": 333,
+      "correct": 333,
+      "accuracy": 1.0
+    },
+    "full_role_position|loan": {
+      "total": 334,
+      "correct": 334,
+      "accuracy": 1.0
+    },
+    "full_role_position|meeting": {
+      "total": 333,
+      "correct": 333,
+      "accuracy": 1.0
+    },
+    "full_role_position|project": {
+      "total": 333,
+      "correct": 333,
+      "accuracy": 1.0
+    },
+    "full_role_position|purchase": {
+      "total": 333,
+      "correct": 333,
+      "accuracy": 1.0
+    },
+    "full_role_position|travel": {
+      "total": 334,
+      "correct": 334,
+      "accuracy": 1.0
+    },
+    "no_position|health": {
+      "total": 333,
+      "correct": 236,
+      "accuracy": 0.7087
+    },
+    "no_position|loan": {
+      "total": 334,
+      "correct": 334,
+      "accuracy": 1.0
+    },
+    "no_position|meeting": {
+      "total": 333,
+      "correct": 266,
+      "accuracy": 0.7988
+    },
+    "no_position|project": {
+      "total": 333,
+      "correct": 333,
+      "accuracy": 1.0
+    },
+    "no_position|purchase": {
+      "total": 333,
+      "correct": 333,
+      "accuracy": 1.0
+    },
+    "no_position|travel": {
+      "total": 334,
+      "correct": 334,
+      "accuracy": 1.0
+    },
+    "noisy_full_role_position|health": {
+      "total": 333,
+      "correct": 279,
+      "accuracy": 0.8378
+    },
+    "noisy_full_role_position|loan": {
+      "total": 334,
+      "correct": 289,
+      "accuracy": 0.8653
+    },
+    "noisy_full_role_position|meeting": {
+      "total": 333,
+      "correct": 275,
+      "accuracy": 0.8258
+    },
+    "noisy_full_role_position|project": {
+      "total": 333,
+      "correct": 287,
+      "accuracy": 0.8619
+    },
+    "noisy_full_role_position|purchase": {
+      "total": 333,
+      "correct": 292,
+      "accuracy": 0.8769
+    },
+    "noisy_full_role_position|travel": {
+      "total": 334,
+      "correct": 287,
+      "accuracy": 0.8593
+    },
+    "value_bag|health": {
+      "total": 333,
+      "correct": 236,
+      "accuracy": 0.7087
+    },
+    "value_bag|loan": {
+      "total": 334,
+      "correct": 171,
+      "accuracy": 0.512
+    },
+    "value_bag|meeting": {
+      "total": 333,
+      "correct": 266,
+      "accuracy": 0.7988
+    },
+    "value_bag|project": {
+      "total": 333,
+      "correct": 174,
+      "accuracy": 0.5225
+    },
+    "value_bag|purchase": {
+      "total": 333,
+      "correct": 333,
+      "accuracy": 1.0
+    },
+    "value_bag|travel": {
+      "total": 334,
+      "correct": 99,
+      "accuracy": 0.2964
+    }
+  },
+  "accuracy_by_target_role": {
+    "full_role_position|action": {
+      "total": 246,
+      "correct": 246,
+      "accuracy": 1.0
+    },
+    "full_role_position|cause": {
+      "total": 350,
+      "correct": 350,
+      "accuracy": 1.0
+    },
+    "full_role_position|from_where": {
+      "total": 77,
+      "correct": 77,
+      "accuracy": 1.0
+    },
+    "full_role_position|intent": {
+      "total": 152,
+      "correct": 152,
+      "accuracy": 1.0
+    },
+    "full_role_position|object": {
+      "total": 325,
+      "correct": 325,
+      "accuracy": 1.0
+    },
+    "full_role_position|outcome": {
+      "total": 159,
+      "correct": 159,
+      "accuracy": 1.0
+    },
+    "full_role_position|place": {
+      "total": 447,
+      "correct": 447,
+      "accuracy": 1.0
+    },
+    "full_role_position|to_where": {
+      "total": 87,
+      "correct": 87,
+      "accuracy": 1.0
+    },
+    "full_role_position|who": {
+      "total": 75,
+      "correct": 75,
+      "accuracy": 1.0
+    },
+    "full_role_position|with_who": {
+      "total": 82,
+      "correct": 82,
+      "accuracy": 1.0
+    },
+    "no_position|action": {
+      "total": 246,
+      "correct": 246,
+      "accuracy": 1.0
+    },
+    "no_position|cause": {
+      "total": 350,
+      "correct": 350,
+      "accuracy": 1.0
+    },
+    "no_position|from_where": {
+      "total": 77,
+      "correct": 77,
+      "accuracy": 1.0
+    },
+    "no_position|intent": {
+      "total": 152,
+      "correct": 152,
+      "accuracy": 1.0
+    },
+    "no_position|object": {
+      "total": 325,
+      "correct": 325,
+      "accuracy": 1.0
+    },
+    "no_position|outcome": {
+      "total": 159,
+      "correct": 159,
+      "accuracy": 1.0
+    },
+    "no_position|place": {
+      "total": 447,
+      "correct": 350,
+      "accuracy": 0.783
+    },
+    "no_position|to_where": {
+      "total": 87,
+      "correct": 87,
+      "accuracy": 1.0
+    },
+    "no_position|who": {
+      "total": 75,
+      "correct": 8,
+      "accuracy": 0.1067
+    },
+    "no_position|with_who": {
+      "total": 82,
+      "correct": 82,
+      "accuracy": 1.0
+    },
+    "noisy_full_role_position|action": {
+      "total": 246,
+      "correct": 206,
+      "accuracy": 0.8374
+    },
+    "noisy_full_role_position|cause": {
+      "total": 350,
+      "correct": 302,
+      "accuracy": 0.8629
+    },
+    "noisy_full_role_position|from_where": {
+      "total": 77,
+      "correct": 63,
+      "accuracy": 0.8182
+    },
+    "noisy_full_role_position|intent": {
+      "total": 152,
+      "correct": 124,
+      "accuracy": 0.8158
+    },
+    "noisy_full_role_position|object": {
+      "total": 325,
+      "correct": 290,
+      "accuracy": 0.8923
+    },
+    "noisy_full_role_position|outcome": {
+      "total": 159,
+      "correct": 140,
+      "accuracy": 0.8805
+    },
+    "noisy_full_role_position|place": {
+      "total": 447,
+      "correct": 372,
+      "accuracy": 0.8322
+    },
+    "noisy_full_role_position|to_where": {
+      "total": 87,
+      "correct": 80,
+      "accuracy": 0.9195
+    },
+    "noisy_full_role_position|who": {
+      "total": 75,
+      "correct": 62,
+      "accuracy": 0.8267
+    },
+    "noisy_full_role_position|with_who": {
+      "total": 82,
+      "correct": 70,
+      "accuracy": 0.8537
+    },
+    "value_bag|action": {
+      "total": 246,
+      "correct": 246,
+      "accuracy": 1.0
+    },
+    "value_bag|cause": {
+      "total": 350,
+      "correct": 350,
+      "accuracy": 1.0
+    },
+    "value_bag|from_where": {
+      "total": 77,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "value_bag|intent": {
+      "total": 152,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "value_bag|object": {
+      "total": 325,
+      "correct": 240,
+      "accuracy": 0.7385
+    },
+    "value_bag|outcome": {
+      "total": 159,
+      "correct": 74,
+      "accuracy": 0.4654
+    },
+    "value_bag|place": {
+      "total": 447,
+      "correct": 350,
+      "accuracy": 0.783
+    },
+    "value_bag|to_where": {
+      "total": 87,
+      "correct": 0,
+      "accuracy": 0.0
+    },
+    "value_bag|who": {
+      "total": 75,
+      "correct": 8,
+      "accuracy": 0.1067
+    },
+    "value_bag|with_who": {
+      "total": 82,
+      "correct": 11,
+      "accuracy": 0.1341
+    }
+  },
+  "error_examples": {
+    "value_bag": [
+      {
+        "id": "structured-fidelity-0001",
+        "event_type": "loan",
+        "query": "现在想做什么？",
+        "original_text": "李然三月初本来想申请一笔分期额度买搬家押金，但因为收入证明还没开好，所以暂时没申请。现在利率重新降下来了，想先比较两家银行。",
+        "expected_value": "想先比较两家银行",
+        "predicted_value": "想申请分期额度买搬家押金",
+        "error_type": "wrong_role"
+      },
+      {
+        "id": "structured-fidelity-0002",
+        "event_type": "travel",
+        "query": "从哪里出发？",
+        "original_text": "Maya周五下午从上海出发去北京看展，和陈晨一起，晚上住在星河青旅。",
+        "expected_value": "上海",
+        "predicted_value": "星河青旅",
+        "error_type": "wrong_role"
+      },
+      {
+        "id": "structured-fidelity-0003",
+        "event_type": "project",
+        "query": "下一步要做什么？",
+        "original_text": "Maya版本冻结前讨论客服助手时决定把召回阈值调高，原因是审计需要可解释证据，下一步是明天补一组回归测试。",
+        "expected_value": "明天补一组回归测试",
+        "predicted_value": "把召回阈值调高",
+        "error_type": "wrong_role"
+      },
+      {
+        "id": "structured-fidelity-0008",
+        "event_type": "travel",
+        "query": "和谁一起？",
+        "original_text": "李然五一假期从深圳出发去杭州参加面试，和陈晨一起，晚上住在云杉酒店。",
+        "expected_value": "陈晨",
+        "predicted_value": "李然",
+        "error_type": "wrong_role"
+      },
+      {
+        "id": "structured-fidelity-0014",
+        "event_type": "travel",
+        "query": "到哪里去？",
+        "original_text": "苏晴昨天早上从厦门出发去南京看展，和陈晨一起，晚上住在北站公寓。",
+        "expected_value": "南京",
+        "predicted_value": "北站公寓",
+        "error_type": "wrong_role"
+      },
+      {
+        "id": "structured-fidelity-0015",
+        "event_type": "project",
+        "query": "讨论的是哪个项目？",
+        "original_text": "周宁今天午后讨论记忆系统时决定先保留结构化标签，原因是客户追问原因链，下一步是今晚写 ADR。",
+        "expected_value": "记忆系统",
+        "predicted_value": "先保留结构化标签",
+        "error_type": "wrong_role"
+      },
+      {
+        "id": "structured-fidelity-0019",
+        "event_type": "loan",
+        "query": "之前最后做了什么决定？",
+        "original_text": "小林三月初本来想申请一笔短期贷款买相机，但因为担心利率临时上调，所以暂时没申请。现在流水已经稳定三个月，想重新看看额度。",
+        "expected_value": "暂时没申请",
+        "predicted_value": "想申请短期贷款买相机",
+        "error_type": "wrong_role"
+      },
+      {
+        "id": "structured-fidelity-0020",
+        "event_type": "travel",
+        "query": "从哪里出发？",
+        "original_text": "李然四月二十号从深圳出发去南京探亲，和周宁一起，晚上住在河岸民宿。",
+        "expected_value": "深圳",
+        "predicted_value": "河岸民宿",
+        "error_type": "wrong_role"
+      }
+    ],
+    "noisy_full_role_position": [
+      {
+        "id": "structured-fidelity-0012",
+        "event_type": "meeting",
+        "query": "讨论什么主题？",
+        "original_text": "阿哲今天十点在客户办公室开会讨论模型成本，会上让产品补充说明，负责人是李然。",
+        "expected_value": "模型成本",
+        "predicted_value": "",
+        "error_type": "missing_target"
+      },
+      {
+        "id": "structured-fidelity-0018",
+        "event_type": "meeting",
+        "query": "会上做了什么？",
+        "original_text": "小林上线前一天在三号会议室开会讨论续费风险，会上要求先做小流量验证，负责人是苏晴。",
+        "expected_value": "要求先做小流量验证",
+        "predicted_value": "暂时没申请",
+        "error_type": "wrong_value"
+      },
+      {
+        "id": "structured-fidelity-0020",
+        "event_type": "travel",
+        "query": "从哪里出发？",
+        "original_text": "李然四月二十号从深圳出发去南京探亲，和周宁一起，晚上住在河岸民宿。",
+        "expected_value": "深圳",
+        "predicted_value": "北京",
+        "error_type": "wrong_value"
+      },
+      {
+        "id": "structured-fidelity-0024",
+        "event_type": "meeting",
+        "query": "讨论什么主题？",
+        "original_text": "阿哲上线前一天在三号会议室开会讨论续费风险，会上要求先做小流量验证，负责人是陈晨。",
+        "expected_value": "续费风险",
+        "predicted_value": "降噪耳机",
+        "error_type": "wrong_value"
+      },
+      {
+        "id": "structured-fidelity-0026",
+        "event_type": "travel",
+        "query": "晚上住在哪里？",
+        "original_text": "Maya周五下午从上海出发去杭州探亲，和周宁一起，晚上住在星河青旅。",
+        "expected_value": "星河青旅",
+        "predicted_value": "",
+        "error_type": "missing_target"
+      },
+      {
+        "id": "structured-fidelity-0028",
+        "event_type": "health",
+        "query": "医生建议什么？",
+        "original_text": "王珂上周六因为嗓子发炎去校医院看诊，医生建议减少跑步量，药放在书桌左边抽屉。",
+        "expected_value": "减少跑步量",
+        "predicted_value": "",
+        "error_type": "missing_target"
+      },
+      {
+        "id": "structured-fidelity-0036",
+        "event_type": "meeting",
+        "query": "会上做了什么？",
+        "original_text": "Maya月底复盘时在白板区开会讨论发布节奏，会上让产品补充说明，负责人是Maya。",
+        "expected_value": "让产品补充说明",
+        "predicted_value": "",
+        "error_type": "missing_target"
+      },
+      {
+        "id": "structured-fidelity-0045",
+        "event_type": "project",
+        "query": "做了什么决定？",
+        "original_text": "王珂客户演示后讨论记忆系统时决定把召回阈值调高，原因是客户追问原因链，下一步是本周整理错误样本。",
+        "expected_value": "把召回阈值调高",
+        "predicted_value": "暂时没申请",
+        "error_type": "wrong_value"
+      }
+    ],
+    "no_position": [
+      {
+        "id": "structured-fidelity-0060",
+        "event_type": "meeting",
+        "query": "负责人是谁？",
+        "original_text": "阿哲周二例会在客户办公室开会讨论发布节奏，会上记录了三个待办，负责人是陈晨。",
+        "expected_value": "陈晨",
+        "predicted_value": "阿哲",
+        "error_type": "missing_position"
+      },
+      {
+        "id": "structured-fidelity-0064",
+        "event_type": "health",
+        "query": "药放在哪里？",
+        "original_text": "陈晨今天早上因为胃痛反复去社区诊所看诊，医生建议减少跑步量，药放在床头柜第二层。",
+        "expected_value": "床头柜第二层",
+        "predicted_value": "社区诊所",
+        "error_type": "missing_position"
+      },
+      {
+        "id": "structured-fidelity-0070",
+        "event_type": "health",
+        "query": "药放在哪里？",
+        "original_text": "周宁三月体检后因为膝盖酸胀去南山门诊看诊，医生建议饭后吃药，药放在厨房白色药盒。",
+        "expected_value": "厨房白色药盒",
+        "predicted_value": "南山门诊",
+        "error_type": "missing_position"
+      },
+      {
+        "id": "structured-fidelity-0076",
+        "event_type": "health",
+        "query": "药放在哪里？",
+        "original_text": "王珂上周六因为睡眠很浅去社区诊所看诊，医生建议减少跑步量，药放在书桌左边抽屉。",
+        "expected_value": "书桌左边抽屉",
+        "predicted_value": "社区诊所",
+        "error_type": "missing_position"
+      },
+      {
+        "id": "structured-fidelity-0078",
+        "event_type": "meeting",
+        "query": "负责人是谁？",
+        "original_text": "Maya月底复盘时在客户办公室开会讨论模型成本，会上记录了三个待办，负责人是阿哲。",
+        "expected_value": "阿哲",
+        "predicted_value": "Maya",
+        "error_type": "missing_position"
+      },
+      {
+        "id": "structured-fidelity-0090",
+        "event_type": "meeting",
+        "query": "负责人是谁？",
+        "original_text": "小林今天十点在白板区开会讨论权限审批，会上让产品补充说明，负责人是阿哲。",
+        "expected_value": "阿哲",
+        "predicted_value": "小林",
+        "error_type": "missing_position"
+      },
+      {
+        "id": "structured-fidelity-0094",
+        "event_type": "health",
+        "query": "药放在哪里？",
+        "original_text": "Maya上周六因为胃痛反复去仁和医院看诊，医生建议复查血常规，药放在书桌左边抽屉。",
+        "expected_value": "书桌左边抽屉",
+        "predicted_value": "仁和医院",
+        "error_type": "missing_position"
+      },
+      {
+        "id": "structured-fidelity-0100",
+        "event_type": "health",
+        "query": "药放在哪里？",
+        "original_text": "阿哲三月体检后因为膝盖酸胀去仁和医院看诊，医生建议饭后吃药，药放在背包夹层。",
+        "expected_value": "背包夹层",
+        "predicted_value": "仁和医院",
+        "error_type": "missing_position"
+      }
+    ]
+  },
+  "interpretation": {
+    "full_role_position": "Uses role and position. This estimates whether subtags preserve enough information.",
+    "no_position": "Uses role only. This estimates damage from dropping event order/stage.",
+    "value_bag": "Ignores role and position. This estimates a weak prompt that treats subtags as loose text.",
+    "noisy_full_role_position": "Uses role and position after simulated extraction noise."
+  }
+}

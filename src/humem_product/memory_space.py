@@ -23,6 +23,21 @@ class MemoryDynamicsConfig:
     retrieval_depth_lift: float = 0.05
     relation_depth_decay: float = 0.76
     relation_access_floor: float = 0.55
+    forgetting_model: str = "ebbinghaus"
+    retention_floor: float = 0.05
+    base_forgetting_rate: float = 0.34
+    strength_retention_lift: float = 0.28
+    retrieval_retention_lift: float = 0.08
+    feedback_retention_lift: float = 0.12
+    negative_feedback_forgetting_boost: float = 0.35
+
+    def __post_init__(self) -> None:
+        if self.forgetting_model not in {"ebbinghaus", "linear"}:
+            raise ValueError("forgetting_model must be one of: ebbinghaus, linear")
+        if not 0.0 <= self.retention_floor < 1.0:
+            raise ValueError("retention_floor must be >= 0 and < 1")
+        if self.base_forgetting_rate < 0:
+            raise ValueError("base_forgetting_rate must be non-negative")
 
 
 class MemorySpace:
@@ -253,6 +268,71 @@ class MemorySpace:
             self._rebuild_cross_layer_flags()
 
     def forget(self, step: float = 0.14) -> None:
+        if self.dynamics.forgetting_model == "linear":
+            self._forget_linear(step=step)
+            return
+
+        any_layer_change = False
+        for fragment in self.fragments.values():
+            old_elapsed = max(fragment.forgettings, 0)
+            new_elapsed = old_elapsed + 1
+            previous_retention = self._ebbinghaus_retention(fragment, step=step, elapsed_cycles=old_elapsed)
+            current_retention = self._ebbinghaus_retention(fragment, step=step, elapsed_cycles=new_elapsed)
+            cycle_retention = current_retention / previous_retention if previous_retention > 0 else current_retention
+            cycle_retention = max(0.0, min(cycle_retention, 1.0))
+            is_anchor = _is_consolidation_anchor(fragment)
+
+            if is_anchor:
+                cycle_retention = max(cycle_retention, 0.94)
+
+            fragment.activation = max(fragment.activation * cycle_retention, 0.0)
+            strength_retention = 1.0 - (1.0 - cycle_retention) * 0.38
+            ease_retention = 1.0 - (1.0 - cycle_retention) * 0.22
+            if is_anchor:
+                strength_retention = max(strength_retention, 0.98)
+                ease_retention = max(ease_retention, 0.985)
+            fragment.strength = max(fragment.strength * strength_retention, 0.0)
+            fragment.ease = max(fragment.ease * ease_retention, 0.05)
+            fragment.forgettings += 1
+
+            old_layer = fragment.layer
+            support_signal = self._fragment_support_signal(fragment)
+            if (
+                is_anchor
+                and current_retention < 0.12
+                and fragment.activation < 0.08
+                and fragment.layer < self.total_layers - 1
+            ):
+                fragment.layer = min(fragment.layer + 1, self.total_layers - 1)
+            elif (
+                not is_anchor
+                and current_retention < 0.24
+                and fragment.activation < 0.22
+                and fragment.layer < self.total_layers - 1
+            ):
+                fragment.layer = min(fragment.layer + 1, self.total_layers - 1)
+            elif (
+                current_retention > 0.72
+                and fragment.activation > 0.72
+                and support_signal >= 3.0
+            ):
+                fragment.layer = self._move_up(fragment.layer, step * 0.5)
+            elif fragment.activation > 1.15:
+                fragment.layer = self._move_up(fragment.layer, step * 0.5)
+
+            if old_layer != fragment.layer:
+                any_layer_change = True
+            self.refresh_fragment_state(fragment)
+
+        if any_layer_change:
+            self._rebuild_cross_layer_flags()
+
+    def retention_for_fragment(self, fragment: MemoryFragment, *, step: float = 0.14) -> float:
+        if self.dynamics.forgetting_model == "linear":
+            return max(self.dynamics.retention_floor, 1.0 - max(fragment.forgettings, 0) * max(step, 0.0))
+        return self._ebbinghaus_retention(fragment, step=step, elapsed_cycles=max(fragment.forgettings, 0))
+
+    def _forget_linear(self, *, step: float) -> None:
         any_layer_change = False
         for fragment in self.fragments.values():
             fragment.activation = max(fragment.activation - step, 0.0)
@@ -272,6 +352,55 @@ class MemorySpace:
 
         if any_layer_change:
             self._rebuild_cross_layer_flags()
+
+    def _ebbinghaus_retention(
+        self,
+        fragment: MemoryFragment,
+        *,
+        step: float,
+        elapsed_cycles: int,
+    ) -> float:
+        if elapsed_cycles <= 0:
+            return 1.0
+        rate_scale = max(step, 0.0) / 0.14 if step > 0 else 0.0
+        rate = self.dynamics.base_forgetting_rate * rate_scale
+        negative_feedback = _feedback_count(fragment, "negative")
+        if negative_feedback:
+            rate *= 1.0 + min(negative_feedback, 4) * self.dynamics.negative_feedback_forgetting_boost
+        if _is_consolidation_anchor(fragment):
+            rate *= 0.42
+        stability = self._fragment_stability(fragment)
+        value = math.exp(-rate * elapsed_cycles / max(stability, 0.1))
+        return max(self.dynamics.retention_floor, min(value, 1.0))
+
+    def _fragment_stability(self, fragment: MemoryFragment) -> float:
+        relation_count = len(self.out_edges.get(fragment.fragment_id, set()) | self.in_edges.get(fragment.fragment_id, set()))
+        positive_feedback = _feedback_count(fragment, "positive")
+        source_support = min(max(fragment.source_count - 1, 0) * 0.06, 0.24)
+        relation_support = min(relation_count * 0.04, 0.24)
+        reinforcement_support = math.log1p(max(fragment.reinforcements - 1, 0)) * 0.05
+        stability = (
+            1.0
+            + max(fragment.strength, 0.0) * self.dynamics.strength_retention_lift
+            + math.log1p(max(fragment.retrievals, 0)) * self.dynamics.retrieval_retention_lift
+            + positive_feedback * self.dynamics.feedback_retention_lift
+            + source_support
+            + relation_support
+            + reinforcement_support
+        )
+        if _is_consolidation_anchor(fragment):
+            stability += 1.2
+        return stability
+
+    def _fragment_support_signal(self, fragment: MemoryFragment) -> float:
+        relation_count = len(self.out_edges.get(fragment.fragment_id, set()) | self.in_edges.get(fragment.fragment_id, set()))
+        return (
+            math.log1p(max(fragment.retrievals, 0))
+            + math.log1p(max(fragment.reinforcements, 0))
+            + _feedback_count(fragment, "positive")
+            + min(max(fragment.source_count - 1, 0), 3) * 0.25
+            + min(relation_count, 3) * 0.2
+        )
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -491,3 +620,16 @@ def _coerce_dynamics(value: MemoryDynamicsConfig | dict[str, Any] | None) -> Mem
         return value
     allowed = set(MemoryDynamicsConfig.__dataclass_fields__)
     return MemoryDynamicsConfig(**{key: val for key, val in value.items() if key in allowed})
+
+
+def _feedback_count(fragment: MemoryFragment, key: str) -> int:
+    feedback = fragment.metadata.get("feedback")
+    if not isinstance(feedback, dict):
+        return 0
+    value = feedback.get(key, 0)
+    return int(value) if isinstance(value, int | float) else 0
+
+
+def _is_consolidation_anchor(fragment: MemoryFragment) -> bool:
+    consolidation = fragment.metadata.get("consolidation")
+    return isinstance(consolidation, dict) and bool(consolidation.get("anchor"))

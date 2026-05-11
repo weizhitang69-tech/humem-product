@@ -1,0 +1,132 @@
+{
+  "sample_count": 2000,
+  "seed": 20260511,
+  "tokenizer": "tiktoken:cl100k_base",
+  "overall": {
+    "avg_tokens": {
+      "raw_text": 989.55,
+      "structured_json": 245.42,
+      "compact_structured": 99.33,
+      "answer_slot": 26.12
+    },
+    "avg_savings_vs_raw": {
+      "structured_json": 0.3295,
+      "compact_structured": 0.7287,
+      "answer_slot": 0.9285
+    }
+  },
+  "by_length": [
+    {
+      "target_paragraph_chars": 80,
+      "samples": 286,
+      "avg_actual_paragraph_chars": 80.9,
+      "avg_tokens": {
+        "raw_text": 119.52,
+        "structured_json": 246.03,
+        "compact_structured": 99.7,
+        "answer_slot": 26.26
+      },
+      "avg_savings_vs_raw": {
+        "structured_json": -1.0577,
+        "compact_structured": 0.1665,
+        "answer_slot": 0.7803
+      }
+    },
+    {
+      "target_paragraph_chars": 160,
+      "samples": 286,
+      "avg_actual_paragraph_chars": 160.9,
+      "avg_tokens": {
+        "raw_text": 205.8,
+        "structured_json": 245.16,
+        "compact_structured": 99.06,
+        "answer_slot": 26.13
+      },
+      "avg_savings_vs_raw": {
+        "structured_json": -0.1924,
+        "compact_structured": 0.5183,
+        "answer_slot": 0.8731
+      }
+    },
+    {
+      "target_paragraph_chars": 320,
+      "samples": 286,
+      "avg_actual_paragraph_chars": 320.9,
+      "avg_tokens": {
+        "raw_text": 378.95,
+        "structured_json": 244.85,
+        "compact_structured": 99.06,
+        "answer_slot": 26.23
+      },
+      "avg_savings_vs_raw": {
+        "structured_json": 0.3535,
+        "compact_structured": 0.7385,
+        "answer_slot": 0.9308
+      }
+    },
+    {
+      "target_paragraph_chars": 640,
+      "samples": 286,
+      "avg_actual_paragraph_chars": 640.9,
+      "avg_tokens": {
+        "raw_text": 723.6,
+        "structured_json": 245.35,
+        "compact_structured": 99.27,
+        "answer_slot": 25.98
+      },
+      "avg_savings_vs_raw": {
+        "structured_json": 0.6605,
+        "compact_structured": 0.8626,
+        "answer_slot": 0.9641
+      }
+    },
+    {
+      "target_paragraph_chars": 1000,
+      "samples": 286,
+      "avg_actual_paragraph_chars": 1000.9,
+      "avg_tokens": {
+        "raw_text": 1115.76,
+        "structured_json": 245.77,
+        "compact_structured": 99.6,
+        "answer_slot": 26.23
+      },
+      "avg_savings_vs_raw": {
+        "structured_json": 0.7794,
+        "compact_structured": 0.9106,
+        "answer_slot": 0.9765
+      }
+    },
+    {
+      "target_paragraph_chars": 1600,
+      "samples": 285,
+      "avg_actual_paragraph_chars": 1600.9,
+      "avg_tokens": {
+        "raw_text": 1764.08,
+        "structured_json": 245.3,
+        "compact_structured": 99.23,
+        "answer_slot": 25.9
+      },
+      "avg_savings_vs_raw": {
+        "structured_json": 0.8608,
+        "compact_structured": 0.9437,
+        "answer_slot": 0.9853
+      }
+    },
+    {
+      "target_paragraph_chars": 2400,
+      "samples": 285,
+      "avg_actual_paragraph_chars": 2400.9,
+      "avg_tokens": {
+        "raw_text": 2627.58,
+        "structured_json": 245.46,
+        "compact_structured": 99.39,
+        "answer_slot": 26.14
+      },
+      "avg_savings_vs_raw": {
+        "structured_json": 0.9065,
+        "compact_structured": 0.9621,
+        "answer_slot": 0.9901
+      }
+    }
+  ]
+}
